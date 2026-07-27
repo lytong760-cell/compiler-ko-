@@ -1,0 +1,457 @@
+ĐẶC TẢ KỸ THUẬT NGÔN NGỮ LẬP TRÌNH .KO
+
+Phiên bản đặc tả (Specification Version): 2.0
+
+Loại ngôn ngữ: Đa mô hình (Multi-Paradigm: Object-Oriented, Procedural, Low-Level Memory Manipulation)
+
+Mục tiêu thiết kế: Tách biệt rõ ràng giữa Mã lệnh (Code) và Dữ liệu (Data), Đóng gói Phạm vi (Scope Encapsulation) chặt chẽ, Kiểm soát Bộ nhớ trực tiếp.
+
+I. MÔ HÌNH VÀ TỪ VỰNG CÚ PHÁP TỔNG QUÁT (LEXICAL & SYNTAX GRAMMAR)
+
+1. Nguyên tắc Tách biệt Lệnh và Dữ liệu (Code vs. Data Separation)
+
+Ngôn ngữ .ko phân định rạch ròi giữa cấu trúc điều khiển thực thi và cấu trúc lưu trữ dữ liệu bằng hệ thống ký tự bao bọc (Delimiters):
+
+Khối lệnh thực thi / Phạm vi (Scope Block): Dùng duy nhất cặp ngoặc vuông [ ].
+
+Cấu trúc Dữ liệu & Tham số (Data Structure & Parameters): Dùng cặp ngoặc tròn ( ) và ngoặc nhọn { }.
+
+2. Ký hiệu Nhận dạng đặc biệt (Sigils & Operators)
+
+Toán tử Định danh *: Được dùng để khai báo biến, định nghĩa tham số, khởi tạo đối tượng (Instance) và định nghĩa/gọi hàm hoặc Lớp.
+
+Thẻ Hệ thống < >: Bao bọc các từ khóa lệnh built-in, thẻ thao tác hệ thống, cờ điều khiển, thao tác I/O và truy xuất chỉ mục (Indexing).
+
+Con trỏ Tham chiếu Thể hiện $: Trỏ tới một thể hiện (Instance) của Class đã được cấp phát bộ nhớ hoặc một Module đã nạp.
+
+3. Quy tắc Phạm vi Thực thi (Execution Scope Constraint)
+
+Luật tối cao: Không cho phép câu lệnh thực thi độc lập tại phạm vi Toàn cục (Global Scope). Tất cả các câu lệnh thực thi bắt buộc phải nằm bên trong Hàm (Function) hoặc Khối thực thi chính (Main Block [ ]).
+
+II. HỆ THỐNG KIỂU DỮ LIỆU NGUYÊN THỦY (PRIMITIVE DATA TYPES)
+
+Mọi biến thuộc kiểu nguyên thủy đều tuân theo cú pháp khai báo chuẩn:
+
+
+$$\text{kiểu\_dữ\_liệu}(\text{giá\_trị\_khởi\_tạo})*\text{tên\_biến}$$
+
+Kiểu dữ liệu (Type)
+
+Tên định danh
+
+Bảng tả ngữ nghĩa (Semantics)
+
+Cú pháp khai báo mẫu
+
+Integer
+
+int
+
+Số nguyên 64-bit có dấu.
+
+int(100)*hp
+
+Floating-Point
+
+freal
+
+Số thực phẩy động kép. Là kiểu mặc định cho biến đếm vòng lặp.
+
+freal(3.14)*pi
+
+String
+
+string
+
+Chuỗi ký tự Unicode UTF-8.
+
+string("Phong")*name
+
+Boolean
+
+booling
+
+Kiểu logic, chứa hai cờ giá trị đặc biệt là \True\ hoặc \False\.
+
+booling(\True\)*is_active
+
+Byte
+
+byte
+
+Dữ liệu chuỗi byte nhị phân cấp thấp.
+
+byte("hello")*a
+
+III. CẤU TRÚC DỮ LIỆU VÀ THAO TÁC TRUY XUẤT (COMPOUND STRUCTURES & INDEXING)
+
+1. Khai báo Cấu trúc Dữ liệu Phức hợp
+
+Sử dụng sự kết hợp giữa ngoặc tròn () và ngoặc nhọn {}:
+
+| Tuple / Mảng số nguyên nguyên thủy |
+(1, 2)*a
+
+| Mảng chuỗi ký tự (String Array) |
+('a', 'b')*b
+
+| Danh sách lồng nhau (Nested List) |
+(1('a', 'a'))*list
+
+| Bảng băm / Từ điển (Dictionary - Key/Value) |
+(1{'a'})*dic
+
+
+2. Ngữ nghĩa Truy xuất Chỉ mục (Indexing Logic)
+
+Thao tác truy xuất danh sách hoặc từ điển bắt buộc bọc trong thẻ định tuyến < >:
+
+Truy xuất theo Chỉ mục Đơn (Single Indexing - Base 0):
+
+<printf>^(list<1>)      | Truy xuất phần tử tại chỉ số 1 |
+<printf>^(dic<1>)       | Truy xuất theo Key/Index trong Dictionary |
+
+
+Truy xuất Chỉ mục Lồng nhau (Nested Indexing): Sử dụng thẻ lồng kép < < > >.
+
+<printf>^(list<1<2>>)   | Lấy phần tử chỉ số 1 của danh sách cha, sau đó truy xuất phần tử chỉ số 2 của danh sách con |
+
+
+Đối chiếu Khớp Từ khóa (Key-Value Matching): Sử dụng biểu thức cấu trúc { key { value } }.
+
+<printf>^(list{1{'a'}}) | Trích xuất dữ liệu bằng đối chiếu Key 1 và Value 'a' |
+
+
+IV. HỆ THỐNG NHẬP/XUẤT, BỘ NHỚ VÀ ĐỘT BIẾN TRẠNG THÁI (I/O & STATE MUTATION)
+
+1. Cấu trúc Xuất Dữ liệu (Output Stream)
+
+Xuất chuỗi Tĩnh (Static Output):
+
+<print>string^("Xin chao")
+
+
+Xuất chuỗi Định dạng Biến (Formatted Interpolation Output):
+
+<printf>^("Player HP: {hp}")
+
+
+2. Cấu trúc Nhập Dữ liệu (<input>) - 3 Chế độ Ngữ nghĩa
+
+Thẻ <input> được phân định rõ ràng thành 3 cơ chế xử lý dữ liệu đầu vào:
+
+Chế độ 1: Dòng nhắc Thuần (Pure Prompt Display - Không lưu vết):
+
+<input>("nhap")         | Chỉ hiển thị dòng thông báo trên giao diện, không tiếp nhận dữ liệu vào bộ nhớ |
+
+
+Chế độ 2: Ghi đè Trực tiếp (Direct Variable Overwrite):
+
+string("x")*x
+<input>(x)             | Dữ liệu người dùng nhập sẽ ghi đè trực tiếp vào biến string 'x' đã khai báo |
+
+
+Chế độ 3: Tiếp nhận Dữ liệu qua Toán tử Gán &= (Assignment Capture):
+
+Tạo và cấp phát biến mới ngay tại lệnh nhập:
+
+<input>("Nhập tên: ")&=string("")*name
+
+
+Hứng dữ liệu vào biến đã tồn tại từ trước:
+
+string("")*name
+<input>("Nhập tên: ")&=name
+
+
+3. Thao tác Bộ nhớ Cấp thấp (<memory>)
+
+Truy xuất trực tiếp địa chỉ hoặc con trỏ vùng nhớ của biến:
+
+int(0)*h
+<memory>^h               | Trỏ trực tiếp vào ô nhớ bộ nhớ cấp phát cho biến h |
+
+
+4. Đột biến Trạng thái Tức thì (<now>) - Immediate Mutation
+
+Sử dụng thẻ <now> để ghi đè hoặc tính toán lại giá trị của biến tức thì trong bộ nhớ:
+
+
+$$\text{cú\_pháp: } <\text{now}>(\text{biểu\_thức\_giá\_trị})>\text{tên\_biến}$$
+
+<now>(100)>hp            | Cập nhật giá trị biến hp thành 100 |
+<now>(hp - damage)>hp    | Cập nhật biến hp bằng kết quả biểu thức (hp - damage) |
+
+
+V. CẤU TRÚC HÀM VÀ KHỐI THỰC THI CHÍNH (FUNCTIONS & MAIN ENTRY POINT)
+
+1. Định nghĩa và Gọi Hàm (Functions)
+
+Không sử dụng từ khóa khởi tạo (def, function). Hàm được định nghĩa bằng tên hàm, cặp ngoặc tròn chứa danh sách tham số và khối lệnh [ ].
+
+Hàm không tham số:
+
+tên_hàm() [
+    | Các câu lệnh thực thi |
+]
+
+
+Hàm có tham số truyền vào:
+
+tên_hàm(kiểu_dữ_liệu_1*tham_số_1, kiểu_dữ_liệu_2*tham_số_2) [
+    | Các câu lệnh thực thi |
+]
+
+
+Cú pháp Thực thi / Gọi Hàm:
+
+*tên_hàm()
+*tên_hàm(giá_trị_1, giá_trị_2)
+
+
+2. Khối Thực thi Chính (Main Entry Point Block)
+
+Cú pháp đại diện: Cặp ngoặc vuông [ ] đứng độc lập (không có tên định danh).
+
+Mọi tập tin mã nguồn .ko hợp lệ bắt buộc phải chứa duy nhất một Khối Main [ ] để trình biên dịch xác định điểm khởi chạy chương trình (Entry Point).
+
+VI. CẤU TRÚC DIỀU KHIỂN LUỒNG (CONTROL FLOW)
+
+1. Rẽ nhánh Điều kiện (Conditional Branching)
+
+Sử dụng bộ thẻ cấu trúc <if>, <elif>, và <else>:
+
+<if>(điều_kiện_1) [
+    | Thực thi khi điều_kiện_1 đúng |
+]
+<elif>(điều_kiện_2) [
+    | Thực thi khi điều_kiện_2 đúng |
+]
+<else> [
+    | Thực thi khi tất cả điều kiện trên đều sai |
+]
+
+
+2. Hệ thống Vòng lặp (**Loop**)
+
+Mọi vòng lặp trong .ko bắt buộc phải bắt đầu bằng từ khóa tiền tố **Loop**.
+
+A. Vòng lặp Đếm Số lần (for Loop)
+
+Cấu trúc tổng quát: <for>(*biến_đếm=bắt_ đầu(bước_nhảy)&=kết_thúc)
+
+Bước nhảy mặc định (+1):
+
+**Loop** <for>(*x=1&=6) [
+    | Biến x chạy từ 1 đến 6 (bước tăng mặc định 1) |
+]
+
+
+Bước nhảy tùy chỉnh (Custom Step):
+
+**Loop** <for>(*x=1(2)&=6) [
+    | Biến x chạy các giá trị: 1, 3, 5 (mỗi lần tăng 2 đơn vị) |
+]
+
+
+B. Vòng lặp Điều kiện (while Loop)
+
+Kết hợp giữa nhãn kiểm tra biểu thức @loop(...) và cờ cú pháp <for.f.whle>@also:
+
+@loop(biểu_thức_điều_kiện)
+**Loop** <for.f.whle>@also [
+    | Khối lệnh thực thi lặp lại |
+    <now>(giá_trị_mới)>biến_đếm
+]
+
+
+VII. MÔ-ĐUN NẠP VÀ HỆ THỐNG PHẠM VI (MODULE IMPORT & SCOPE SYSTEM)
+
+1. Cú pháp Nạp Mô-đun (Import Syntax)
+
+Nạp mô-đun external hoặc hệ thống vào chương trình thông qua cấu trúc chỉ định phạm vi:
+
+$$\text{**Import**}(\$\text{Tên\_Module})\text{@also}\%*\text{tên\_biến\_đại\_diện}!`\text{phạm\_vi}`:\text{tên\_biến\_đại\_diện}$$
+
+2. Bảng Mã Thẻ Phạm vi Tầm vực (Scope Identifiers)
+
+Thẻ tầm vực bắt buộc bọc trong dấu ngoặc backtick ` `:
+
+Cú pháp Thẻ Phạm vi
+
+Tầm vực Tương ứng (Scope Level)
+
+Giải thích Ngữ nghĩa
+
+`global`
+
+Global Scope
+
+Phạm vi toàn cục. Tất cả hàm, class, khối lệnh đều truy cập được.
+
+`a` hoặc `main`
+
+Main Block Scope
+
+Giới hạn tầm vực chỉ hoạt động bên trong Khối Main [ ].
+
+`name` hoặc `func`
+
+Function Scope
+
+Giới hạn tầm vực trong các Hàm nói chung.
+
+`class`
+
+Class Scope
+
+Giới hạn tầm vực trong các Lớp nói chung.
+
+`tên_hàm` / `Loop`
+
+Specific Scope
+
+Giới hạn tầm vực trong một Hàm cụ thể hoặc khối đặc biệt (như Loop).
+
+`tên_class`
+
+Specific Class Scope
+
+Giới hạn tầm vực bên trong một Lớp cụ thể.
+
+3. Giao diện Thư viện Chuẩn (Standard Built-in Modules)
+
+Thư viện Sinh số ngẫu nhiên (Random):
+
+**Import**($Random)@also%*random!`global`:random
+int(<$random>(1, 100))*rand_val
+
+
+Thư viện Thao tác Tệp & Hệ thống (Os):
+
+**Import**($Os)@also%*os!`global`:os
+<$os>("data.txt")*file_var                     | Cấp phát và mở tập tin |
+
+
+Thư viện Mạng & Tên miền (Website):
+
+**Import**($Website)@also%*web!`global`:web
+<$web>("https://google.com")                   | Gửi truy vấn HTTP/URL |
+<$web>domain("example.com")@app_var           | Cấu hình Domain cho Server |
+
+
+VIII. LẬP TRÌNH HƯỚNG ĐỐI TƯỢNG (OBJECT-ORIENTED PROGRAMMING - OOP)
+
+1. Định nghĩa Lớp (Class Definition)
+
+Sử dụng cú pháp định danh TênClass !class [ ].
+
+2. Cơ chế Điều khiển Truy cập (Access Control)
+
+Public Access: Mặc định tất cả thuộc tính và phương thức nằm ngoài khối @private đều mang phạm vi truy cập Public. Ngôn ngữ không sử dụng thẻ @public.
+
+Private Access: Sử dụng khối đóng gói @private [ ] để bao bọc tất cả các thuộc tính và phương thức nội bộ. Các thành phần này không thể truy cập từ bên ngoài thể hiện.
+
+Monster !class [
+
+    @private [
+        string("Dragon")*name
+        int(100)*hp
+
+        take_damage() [
+            int(<$random>(15, 35))*damage
+            <now>(hp - damage)>hp
+
+            <if>(hp > 50) [
+                <printf>^("Monster {name} trạng thái tốt! HP: {hp}")
+            ]
+            <elif>(hp > 0) [
+                <printf>^("Monster {name} nguy kịch! HP: {hp}")
+            ]
+            <else> [
+                <printf>^("Monster {name} đã bị tiêu diệt!")
+            ]
+        ]
+    ]
+]
+
+
+3. Khởi tạo Thể hiện & Gọi Phương thức (Instantiation & Method Invocation)
+
+Cấp phát Thể hiện (Instantiation): *TênClass*tên_instance
+
+Gọi Phương thức (Method Call): $tên_instance*tên_phương_thức()
+
+*Monster*m1         | Cấp phát thể hiện m1 thuộc Lớp Monster |
+$m1*take_damage()   | Gọi phương thức take_damage của m1 |
+
+
+IX. MÃ NGUỒN CHƯƠNG TRÌNH HOÀN CHỈNH (COMPLETE CODE SPECIFICATION DEMO)
+
+| ========================================================== |
+| 1. Nạp các Thư viện Chuẩn vào Scope Toàn cục (Global)      |
+| ========================================================== |
+**Import**($Random)@also%*random!`global`:random
+**Import**($Os)@also%*os!`global`:os
+**Import**($Website)@also%*web!`global`:web
+
+| ========================================================== |
+| 2. Định nghĩa Hàm Khởi tạo Hệ thống (Function Definition)  |
+| ========================================================== |
+init_system_logs() [
+    <printf>^("=== KHOI TAO HE THONG .KO ===")
+    <$os>("log.txt")*log_file
+    <$web>domain("mygame.com")@app_server
+    <$web>("https://api.mygame.com/status")
+]
+
+| ========================================================== |
+| 3. Định nghĩa Lớp Hero (Class & OOP Specification)         |
+| ========================================================== |
+Hero !class [
+    @private [
+        string("")*name
+        int(100)*hp
+        ('Kiem', 'Khien', 'Binh mau')*inventory
+
+        setup_player() [
+            <input>("Nhap ten anh hung cua ban: ")&=name
+            <printf>^("Chao mung anh hung {name} den voi the gioi .ko!")
+        ]
+
+        use_random_item() [
+            int(<$random>(0, 2))*item_index
+            <printf>^("Hero {name} used item: {inventory<{item_index}>}")
+        ]
+
+        check_status() [
+            <if>(hp >= 80) [
+                <printf>^("Trang thai: Rat khoe")
+            ]
+            <elif>(hp >= 30) [
+                <printf>^("Trang thai: Binh thuong")
+            ]
+            <else> [
+                <printf>^("Trang thai: Nguy hiem!")
+            ]
+        ]
+    ]
+]
+
+| ========================================================== |
+| 4. Khối Thực thi Chính (Main Entry Point Block)           |
+| ========================================================== |
+[
+    *init_system_logs()
+    
+    *Hero*p1
+    $p1*setup_player()
+    
+    | Vòng lặp đếm i từ 1 đến 5 với bước nhảy +2 |
+    **Loop** <for>(*i=1(2)&=5) [
+        <printf>^("--- Turn {i} ---")
+        $p1*use_random_item()
+    ]
+    
+    $p1*check_status()
+]
