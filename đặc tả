@@ -1,293 +1,460 @@
-ĐẶC TẢ KỸ THUẬT NGÔN NGỮ LẬP TRÌNH .KO
+ĐẶC TẢ KỸ THUẬT VÀ KIẾN TRÚC HÌNH THỨC NGÔN NGỮ LẬP TRÌNH .KO
 
-Phiên bản đặc tả (Specification Version): 2.0
+Phiên bản đặc tả (Specification Version):2.505
 
-Loại ngôn ngữ: Đa mô hình (Multi-Paradigm: Object-Oriented, Procedural, Low-Level Memory Manipulation)
+Phân loại ngôn ngữ: Đa mô hình (Multi-Paradigm: Imperative, Object-Oriented, Low-Level Memory Direct Manipulation, Structural Sequential Upward Exception Handling)
 
-Mục tiêu thiết kế: Tách biệt rõ ràng giữa Mã lệnh (Code) và Dữ liệu (Data), Đóng gói Phạm vi (Scope Encapsulation) chặt chẽ, Kiểm soát Bộ nhớ trực tiếp.
+Tiêu chuẩn toán học & Lý thuyết ngôn ngữ: Formal Semantics, Abstract Syntax Tree (AST Mapping), Operational Semantics ($\to$), Denotational Type Domains, EBNF Grammar Specification.
 
-I. MÔ HÌNH VÀ TỪ VỰNG CÚ PHÁP TỔNG QUÁT (LEXICAL & SYNTAX GRAMMAR)
+I. KIẾN TRÚC HẠT NHÂN VÀ THỰC THI CHUẨN HOÁ (RUNTIME ARCHITECTURE & ENGINE TARGET MAPPING)
 
-1. Nguyên tắc Tách biệt Lệnh và Dữ liệu (Code vs. Data Separation)
+Ngôn ngữ .ko vận hành dựa trên mô hình thực thi lai (Hybrid Execution Target Engine). Trình biên dịch/phiên dịch trung tâm (compiler.py) chịu trách nhiệm phân tích cú pháp (Parsing), tạo cây cú pháp trừu tượng (AST), và phân giải ngữ nghĩa để ánh xạ các chỉ thị cấp cao tới các Subsystem thực thi chuyên biệt ở cấp thấp.
 
-Ngôn ngữ .ko phân định rạch ròi giữa cấu trúc điều khiển thực thi và cấu trúc lưu trữ dữ liệu bằng hệ thống ký tự bao bọc (Delimiters):
+1. Sơ đồ Cấu trúc Phân tầng Thực thi (Execution Pipeline Architecture)
 
-Khối lệnh thực thi / Phạm vi (Scope Block): Dùng duy nhất cặp ngoặc vuông [ ].
+Mô hình chuyển đổi trạng thái thực thi được định nghĩa toán học thông qua hàm ánh xạ pipeline:
 
-Cấu trúc Dữ liệu & Tham số (Data Structure & Parameters): Dùng cặp ngoặc tròn ( ) và ngoặc nhọn { }.
+$$\mathcal{P}: \text{SourceCode}_{.ko} \xrightarrow{\text{Lexer/Parser}} \text{AST} \xrightarrow{\text{ScopeResolver}} \text{EngineTarget} \xrightarrow{\text{Execution}} \text{State}'$$
 
-2. Ký hiệu Nhận dạng đặc biệt (Sigils & Operators)
+   +-------------------------------------------------------------------+
+   |                    Mã Nguồn Cấp Cao (.ko)                         |
+   +-------------------------------------------------------------------+
+                                     |
+                                     v
+   +-------------------------------------------------------------------+
+   |             Bộ Phân Tích Cú Pháp Trừu Tượng (compiler.py)          |
+   +-------------------------------------------------------------------+
+                  /                                   \
+                 /                                     \
+                v                                       v
+   +--------------------------+           +----------------------------+
+   |   Subsystem Import Engine|           |    Subsystem Loop Engine   |
+   |      (Import.java)       |           |         (Loop.cpp)         |
+   +--------------------------+           +----------------------------+
+   | - Dynamic Path Resolution|           | - Low-level Loop Unrolling |
+   | - Scope Table Ingestion  |           | - Cache Line Optimization  |
+   | - Module Signature Check |           | - CPU Counter Registers    |
+   +--------------------------+           +----------------------------+
 
-Toán tử Định danh *: Được dùng để khai báo biến, định nghĩa tham số, khởi tạo đối tượng (Instance) và định nghĩa/gọi hàm hoặc Lớp.
-
-Thẻ Hệ thống < >: Bao bọc các từ khóa lệnh built-in, thẻ thao tác hệ thống, cờ điều khiển, thao tác I/O và truy xuất chỉ mục (Indexing).
-
-Con trỏ Tham chiếu Thể hiện $: Trỏ tới một thể hiện (Instance) của Class đã được cấp phát bộ nhớ hoặc một Module đã nạp.
-
-3. Quy tắc Phạm vi Thực thi (Execution Scope Constraint)
-
-Luật tối cao: Không cho phép câu lệnh thực thi độc lập tại phạm vi Toàn cục (Global Scope). Tất cả các câu lệnh thực thi bắt buộc phải nằm bên trong Hàm (Function) hoặc Khối thực thi chính (Main Block [ ]).
-
-II. HỆ THỐNG KIỂU DỮ LIỆU NGUYÊN THỦY (PRIMITIVE DATA TYPES)
-
-Mọi biến thuộc kiểu nguyên thủy đều tuân theo cú pháp khai báo chuẩn:
 
 
-$$\text{kiểu\_dữ\_liệu}(\text{giá\_trị\_khởi\_tạo})*\text{tên\_biến}$$
+2. Ánh xạ Thành phần Hệ thống đặc biệt (Special Keyword Native Mapping)
+
+Hệ thống Nạp Thư viện & Module (Import Subsystem Target):
+
+Từ khóa định danh: **Import**
+
+Thành phần thực thi cấp dưới: Import.java
+
+Ngữ nghĩa vận hành (Semantics): Khi trình đóng ngắt gặp từ khóa **Import**, luồng điều khiển chuyển giao cho runtime Java Virtual Machine (JVM) subsystem Import.java. Subsystem này thực hiện:
+
+Phân giải đường dẫn tuyệt đối/tương đối (Dynamic Path Resolution).
+
+Kiểm tra chữ ký mật mã và định danh module (Module Signature & Identifier Verification).
+
+Tải động (Dynamic Classloading) và chèn không gian tên vào Bảng Tầm Vực (Global/Local Scope Table System).
+
+Động cơ Vòng lặp Hiệu năng cao (Loop Subsystem Target):
+
+Từ khóa định danh: **Loop**
+
+Thành phần thực thi cấp dưới: Loop.cpp
+
+Ngữ nghĩa vận hành (Semantics): Mọi cấu trúc lặp bắt đầu bằng tiền tố **Loop** được trình biên dịch biên dịch thành mã máy/C++ native call do Loop.cpp quản lý:
+
+Quản lý trực tiếp thanh ghi đếm (Hardware Register Allocation).
+
+Tối ưu hóa bộ nhớ đệm lệnh (Instruction Cache & Branch Prediction).
+
+Giải phóng bộ nhớ tạm trong chu kỳ lặp cấp độ microsecond.
+
+II. MÔ HÌNH LÝ THUYẾT VÀ TỪ VỰNG CÚ PHÁP TỔNG QUÁT (LEXICAL & FORMAL SYNTAX GRAMMAR)
+
+1. Nguyên tắc Tách biệt Lệnh và Dữ liệu (Code vs. Data Separation Principle)
+
+Ngôn ngữ .ko thiết lập ranh giới phân định tuyệt đối giữa Khối lệnh điều khiển thực thi (Executable Control Block) và Cấu trúc dữ liệu/Tham số (Data Container) bằng cú pháp phân tách dấu câu (Delimiter Axiom):
+
+Không gian Lệnh / Scope Block ($\mathcal{B}_E$): Sử dụng duy nhất cặp ngoặc vuông [ ].
+
+Không gian Dữ liệu & Tham số ($\mathcal{D}_P$): Sử dụng cặp ngoặc tròn ( ) cho tập hợp/tham số và ngoặc nhọn { } cho ánh xạ Key-Value.
+
+Formally:
+
+$$\mathcal{B}_E \cap \mathcal{D}_P = \emptyset$$
+
+2. Cú pháp Hình thức EBNF (Extended Backus-Naur Form)
+
+Program            ::= ModuleImport* Statement* MainBlock ExceptionHandler* ;
+MainBlock          ::= "[" Statement* "]" ;
+Statement          ::= VarDecl | Assignment | FuncDecl | ClassDecl | ControlFlow | MemoryOp | ExceptionHandler ;
+
+Sigil              ::= "~" ;
+SystemTagOpen      ::= "<" ;
+SystemTagClose     ::= ">" ;
+Comment            ::= "|" [^|]* "|" ;
+
+Identifier         ::= [a-zA-Z_][a-zA-Z0-0_]* ;
+VarDecl            ::= PrimitiveType "(" Expression ")" Sigil Identifier ;
+PrimitiveType      ::= "int" | "freal" | "string" | "booling" | "byte" ;
+
+
+
+3. Ký hiệu Nhận dạng Đặc biệt (Sigils & Delimiters Semantics)
+
+Ký hiệu / Sigil
+
+Tên gọi chuẩn học thuật
+
+Chức năng và Quy tắc Ngữ nghĩa
+
+~
+
+Toán tử Định danh (Identifier Sigil)
+
+Toán tử đơn phân bắt buộc dùng cho khai báo biến, tham số, cấp phát Lớp, định nghĩa/gọi Hàm.
+
+< >
+
+Thẻ Hệ thống (System Tag Delimiters)
+
+Encapsulate các lệnh built-in hệ thống: <printf>, <input>, <return>, <catch>, <memory>, <now>, và cú pháp truy xuất chỉ mục <index>.
+
+$
+
+Con trỏ Tham chiếu Thể hiện (Instance Pointer)
+
+Con trỏ giải tham chiếu thể hiện (Instance Dereference) trỏ tới vùng nhớ Class hoặc Module đã nạp.
+
+`
+
+
+
+`
+
+4. Hệ thống Toán tử (Operators Domain)
+
+Toán tử Số học (Arithmetic Operators $\mathbb{O}_{arith}$):
+
++ : Phép cộng đại số ($a + b$)
+
+- : Phép trừ đại số ($a - b$)
+
+* : Phép nhân đại số ($a \times b$)
+
+/ : Phép chia đại số ($a \div b$)
+
+% : Phép chia lấy số dư ($a \pmod b$)
+
+Toán tử Logic (Logical Operators $\mathbb{O}_{logic}$):
+
+&& : Phép VÀ logic (Conjunction $\land$)
+
+%% : Phép HOẶC logic (Disjunction $\lor$)
+
+5. Tiên đề Tầm vực Thực thi Toàn cục (Global Scope Execution Constraint Axiom)
+
+Tiên đề: Mọi câu lệnh thực thi (Executable Statement) không được phép nằm tự do ở phạm vi Toàn cục (Global Scope). Tất cả câu lệnh thực thi bắt buộc phải đóng gói bên trong một Hàm (Function Scope) hoặc Khối Thực thi Chính (Main Entry Point Block [ ]). Phạm vi toàn cục chỉ chấp nhận các câu lệnh **Import**, khai báo Hàm và khai báo Lớp.
+
+III. HỆ THỐNG KIỂU DỮ LIỆU NGUYÊN THỦY VÀ CẤU TRÚC PHỨC HỢP
+
+1. Kiểu Dữ liệu Nguyên thủy (Primitive Data Domains)
+
+Phương trình khai báo tổng quát:
+
+$$\text{Type}(\text{InitialValue}) \sim \text{Identifier}$$
 
 Kiểu dữ liệu (Type)
 
-Tên định danh
+Miền giá trị Toán học (Domain $\mathbb{D}$)
 
-Bảng tả ngữ nghĩa (Semantics)
+Kích thước Bộ nhớ
 
-Cú pháp khai báo mẫu
-
-Integer
+Ví dụ Cú pháp Chuẩn
 
 int
 
-Số nguyên 64-bit có dấu.
+$\mathbb{Z} \cap [-2^{63}, 2^{63}-1]$ (Integer)
 
-int(100)*hp
+64 bits (8 bytes)
 
-Floating-Point
+int(100)~hp
 
 freal
 
-Số thực phẩy động kép. Là kiểu mặc định cho biến đếm vòng lặp.
+$\mathbb{R} \approx \text{IEEE 754 Double Precision}$
 
-freal(3.14)*pi
+64 bits (8 bytes)
 
-String
+freal(3.14159)~pi
 
 string
 
-Chuỗi ký tự Unicode UTF-8.
+Tập hợp các chuỗi ký tự UTF-8 ($\Sigma^*$)
 
-string("Phong")*name
+Tự động mở rộng
 
-Boolean
+string("Phong")~name
 
 booling
 
-Kiểu logic, chứa hai cờ giá trị đặc biệt là \True\ hoặc \False\.
+Tập giá trị logic $\mathbb{B} = \{\mathtt{\backslash True\backslash}, \mathtt{\backslash False\backslash}\}$
 
-booling(\True\)*is_active
+8 bits (1 byte)
 
-Byte
+booling(\True\)~is_active
 
 byte
 
-Dữ liệu chuỗi byte nhị phân cấp thấp.
+Chuỗi nhị phân $B \in \{0, 1\}^8$
 
-byte("hello")*a
+8 bits / byte
 
-III. CẤU TRÚC DỮ LIỆU VÀ THAO TÁC TRUY XUẤT (COMPOUND STRUCTURES & INDEXING)
+byte("hello")~a
 
-1. Khai báo Cấu trúc Dữ liệu Phức hợp
+2. Cấu trúc Dữ liệu Phức hợp (Complex Data Structures)
 
-Sử dụng sự kết hợp giữa ngoặc tròn () và ngoặc nhọn {}:
+Tuple / Mảng Nguyên thủy (Primitive Array):
 
-| Tuple / Mảng số nguyên nguyên thủy |
-(1, 2)*a
-
-| Mảng chuỗi ký tự (String Array) |
-('a', 'b')*b
-
-| Danh sách lồng nhau (Nested List) |
-(1('a', 'a'))*list
-
-| Bảng băm / Từ điển (Dictionary - Key/Value) |
-(1{'a'})*dic
+(1, 2)~a
 
 
-2. Ngữ nghĩa Truy xuất Chỉ mục (Indexing Logic)
 
-Thao tác truy xuất danh sách hoặc từ điển bắt buộc bọc trong thẻ định tuyến < >:
+Mảng Chuỗi Ký tự (String Array):
 
-Truy xuất theo Chỉ mục Đơn (Single Indexing - Base 0):
-
-<printf>^(list<1>)      | Truy xuất phần tử tại chỉ số 1 |
-<printf>^(dic<1>)       | Truy xuất theo Key/Index trong Dictionary |
+('a', 'b')~b
 
 
-Truy xuất Chỉ mục Lồng nhau (Nested Indexing): Sử dụng thẻ lồng kép < < > >.
 
-<printf>^(list<1<2>>)   | Lấy phần tử chỉ số 1 của danh sách cha, sau đó truy xuất phần tử chỉ số 2 của danh sách con |
+Danh sách Lồng nhau (Nested List Graph):
 
-
-Đối chiếu Khớp Từ khóa (Key-Value Matching): Sử dụng biểu thức cấu trúc { key { value } }.
-
-<printf>^(list{1{'a'}}) | Trích xuất dữ liệu bằng đối chiếu Key 1 và Value 'a' |
+(1('a', 'a'))~list
 
 
-IV. HỆ THỐNG NHẬP/XUẤT, BỘ NHỚ VÀ ĐỘT BIẾN TRẠNG THÁI (I/O & STATE MUTATION)
 
-1. Cấu trúc Xuất Dữ liệu (Output Stream)
+Bảng Băm / Từ điển (Dictionary Key-Value Mapping):
 
-Xuất chuỗi Tĩnh (Static Output):
+(1{'a'})~dic
+
+
+
+3. Ngữ nghĩa Truy xuất Chỉ mục (Indexing Operator Semantics)
+
+Thao tác truy xuất danh sách hoặc từ điển bắt buộc bao bọc trong Thẻ Hệ thống < >:
+
+Truy xuất Chỉ mục Đơn (Single-Level Indexing - Base 0):
+
+$$\mathcal{I}_{single}(A, i) = A[i] \implies \text{\texttt{<printf>^(list<1>)}}$$
+
+Truy xuất Chỉ mục Lồng nhau (Nested Multi-Dimensional Indexing):
+
+$$\mathcal{I}_{nested}(A, i, j) = A[i][j] \implies \text{\texttt{<printf>^(list<1<2>>)}}$$
+
+Đối chiếu Khớp Từ khóa (Key-Value Matching Mechanics):
+Sử dụng biểu thức cấu trúc { key { value } }:
+
+<printf>^(list{1{'a'}})
+
+
+
+IV. HỆ THỐNG NHẬP/XUẤT, BỘ NHỚ VÀ ĐỘT BIẾN TRẠNG THÁI
+
+1. Cấu trúc Xuất Dữ liệu (Output Stream Directives)
+
+Xuất Chuỗi Tĩnh (Static Output):
 
 <print>string^("Xin chao")
 
 
-Xuất chuỗi Định dạng Biến (Formatted Interpolation Output):
+
+Xuất Chuỗi Định dạng Biến (Interpolated Formatted Output):
 
 <printf>^("Player HP: {hp}")
 
 
-2. Cấu trúc Nhập Dữ liệu (<input>) - 3 Chế độ Ngữ nghĩa
 
-Thẻ <input> được phân định rõ ràng thành 3 cơ chế xử lý dữ liệu đầu vào:
+2. Cấu trúc Nhập Dữ liệu (<input>) - 3 Chế độ Ngữ nghĩa (Input Formal Modes)
 
-Chế độ 1: Dòng nhắc Thuần (Pure Prompt Display - Không lưu vết):
+Chế độ 1: Dòng nhắc Thuần (Pure Prompt Display - Null Binding):
 
-<input>("nhap")         | Chỉ hiển thị dòng thông báo trên giao diện, không tiếp nhận dữ liệu vào bộ nhớ |
+$$\mathcal{S} \xrightarrow{\text{input("prompt")}} \mathcal{S} \quad (\text{Không thay đổi trạng thái bộ nhớ})$$
+
+<input>("nhap")
+
 
 
 Chế độ 2: Ghi đè Trực tiếp (Direct Variable Overwrite):
 
-string("x")*x
-<input>(x)             | Dữ liệu người dùng nhập sẽ ghi đè trực tiếp vào biến string 'x' đã khai báo |
+$$\mathcal{S}[x \mapsto v] \xrightarrow{\text{input}(x)} \mathcal{S}[x \mapsto v_{\text{user}}]$$
+
+string("x")~x
+<input>(x)
 
 
-Chế độ 3: Tiếp nhận Dữ liệu qua Toán tử Gán &= (Assignment Capture):
 
-Tạo và cấp phát biến mới ngay tại lệnh nhập:
+Chế độ 3: Tiếp nhận Dữ liệu qua Toán tử Gán &= (Assignment Capture Mode):
 
-<input>("Nhập tên: ")&=string("")*name
+Tạo và cấp phát biến mới tại thời điểm nhập:
+
+<input>("Nhập tên: ")&=string("")~name
 
 
-Hứng dữ liệu vào biến đã tồn tại từ trước:
 
-string("")*name
+Hứng dữ liệu vào biến đã tồn tại:
+
+string("")~name
 <input>("Nhập tên: ")&=name
+
 
 
 3. Thao tác Bộ nhớ Cấp thấp (<memory>)
 
-Truy xuất trực tiếp địa chỉ hoặc con trỏ vùng nhớ của biến:
+Truy xuất Địa chỉ Ô nhớ (Memory Address Dereferencing):
+Trả về giá trị con trỏ bộ nhớ $ptr \in \mathbb{N}_{64}$ của biến:
 
-int(0)*h
-<memory>^h               | Trỏ trực tiếp vào ô nhớ bộ nhớ cấp phát cho biến h |
-
-
-4. Đột biến Trạng thái Tức thì (<now>) - Immediate Mutation
-
-Sử dụng thẻ <now> để ghi đè hoặc tính toán lại giá trị của biến tức thì trong bộ nhớ:
+int(0)~h
+<memory>^h
 
 
-$$\text{cú\_pháp: } <\text{now}>(\text{biểu\_thức\_giá\_trị})>\text{tên\_biến}$$
 
-<now>(100)>hp            | Cập nhật giá trị biến hp thành 100 |
-<now>(hp - damage)>hp    | Cập nhật biến hp bằng kết quả biểu thức (hp - damage) |
+Giải phóng Bộ nhớ Chủ động (Active Memory Deallocation):
+Thu hồi tức thì ô nhớ được cấp phát, gán giá trị biến về $null$ và giải phóng thanh ghi:
+
+$$\mathcal{M}_{\text{free}}(h) \implies \text{Deallocate Memory Segment at } \&h$$
+
+<memory>dete(h)
 
 
-V. CẤU TRÚC HÀM VÀ KHỐI THỰC THI CHÍNH (FUNCTIONS & MAIN ENTRY POINT)
 
-1. Định nghĩa và Gọi Hàm (Functions)
+4. Đột biến Trạng thái Tức thì (<now>) - Immediate Mutation Operator
 
-Không sử dụng từ khóa khởi tạo (def, function). Hàm được định nghĩa bằng tên hàm, cặp ngoặc tròn chứa danh sách tham số và khối lệnh [ ].
+Thẻ <now> thực thi phép biến đổi trạng thái trực tiếp lên ô nhớ của biến mà không thông qua biến trung gian:
 
-Hàm không tham số:
+$$\langle \text{\texttt{<now>}}(e) > x, \, \sigma \rangle \to \sigma [x \mapsto \mathcal{E}\llbracket e \rrbracket \sigma]$$
 
-tên_hàm() [
-    | Các câu lệnh thực thi |
+<now>(100)>hp
+<now>(hp - damage)>hp
+
+
+
+V. CẤU TRÚC HÀM, GIÁ TRỊ TRẢ VỀ VÀ KHỐI THỰC THI CHÍNH
+
+1. Định nghĩa và Gọi Hàm (Function Definition & Invocation)
+
+Hàm là một khối mã đóng gói nhận tham số đầu vào và thực thi trong tầm vực nội bộ.
+
+Cú pháp Định nghĩa Hàm:
+
+tên_hàm(kiểu_1~tham_số_1, kiểu_2~tham_số_2) [
+    | Khối lệnh thực thi |
 ]
 
 
-Hàm có tham số truyền vào:
 
-tên_hàm(kiểu_dữ_liệu_1*tham_số_1, kiểu_dữ_liệu_2*tham_số_2) [
-    | Các câu lệnh thực thi |
-]
+Cú pháp Gọi Hàm:
 
-
-Cú pháp Thực thi / Gọi Hàm:
-
-*tên_hàm()
-*tên_hàm(giá_trị_1, giá_trị_2)
+~tên_hàm(giá_trị_1, giá_trị_2)
 
 
-2. Khối Thực thi Chính (Main Entry Point Block)
 
-Cú pháp đại diện: Cặp ngoặc vuông [ ] đứng độc lập (không có tên định danh).
+2. Cơ chế Trả về Giá trị (<return>)
 
-Mọi tập tin mã nguồn .ko hợp lệ bắt buộc phải chứa duy nhất một Khối Main [ ] để trình biên dịch xác định điểm khởi chạy chương trình (Entry Point).
+Thẻ hệ thống <return> lập tức chấm dứt luồng thực thi trong hàm, đẩy giá trị tính toán lên khung ngăn xếp (Stack Frame) của trình gọi hàm.
 
-VI. CẤU TRÚC DIỀU KHIỂN LUỒNG (CONTROL FLOW)
+Hình thức Cú pháp:
+
+$$\text{\texttt{<return>}}(\text{Expression})$$
+
+Khôi phục Giá trị Trả về (Capture Return Mechanics):
+
+| Hứng giá trị tại thời điểm khởi tạo biến |
+int(~calculate_power(10, 5))~total
+
+| Hứng giá trị thông qua thẻ đột biến trạng thái <now> |
+<now>(~calculate_power(10, 5))>total
+
+
+
+3. Khối Thực thi Chính (Main Entry Point Block)
+
+Khối Main được ký hiệu bởi cặp ngoặc vuông vô danh [ ].
+
+Mọi tệp mã nguồn .ko hợp lệ để khởi chạy bắt buộc phải chứa đúng 1 Khối Main.
+
+VI. CẤU TRÚC ĐIỀU KHIỂN LUỒNG (CONTROL FLOW)
 
 1. Rẽ nhánh Điều kiện (Conditional Branching)
 
 Sử dụng bộ thẻ cấu trúc <if>, <elif>, và <else>:
 
-<if>(điều_kiện_1) [
-    | Thực thi khi điều_kiện_1 đúng |
+<if>(hp > 0 && is_active == \True\) [
+    | Khối thực thi khi điều kiện True |
 ]
-<elif>(điều_kiện_2) [
-    | Thực thi khi điều_kiện_2 đúng |
+<elif>(hp <= 0 %% status == \False\) [
+    | Khối thực thi phụ |
 ]
 <else> [
-    | Thực thi khi tất cả điều kiện trên đều sai |
+    | Khối thực thi mặc định |
 ]
 
 
-2. Hệ thống Vòng lặp (**Loop**)
 
-Mọi vòng lặp trong .ko bắt buộc phải bắt đầu bằng từ khóa tiền tố **Loop**.
+2. Hệ thống Vòng lặp (Loop Engine Target)
 
-A. Vòng lặp Đếm Số lần (for Loop)
+Mọi vòng lặp bắt buộc sử dụng từ khóa Loop để kích hoạt subsystem Loop.cpp.
 
-Cấu trúc tổng quát: <for>(*biến_đếm=bắt_ đầu(bước_nhảy)&=kết_thúc)
+A. Vòng lặp Đếm Số lần (<for> Loop)
 
-Bước nhảy mặc định (+1):
+Cấu trúc tổng quát: <for>(~biến_đếm=bắt_đầu(bước_nhảy)&=kết_thúc)
 
-**Loop** <for>(*x=1&=6) [
-    | Biến x chạy từ 1 đến 6 (bước tăng mặc định 1) |
+Bước nhảy Mặc định (+1):
+
+**Loop** <for>(~x=1&=6) [
+    | x nhận giá trị thuộc tập {1, 2, 3, 4, 5, 6} |
 ]
 
 
-Bước nhảy tùy chỉnh (Custom Step):
 
-**Loop** <for>(*x=1(2)&=6) [
-    | Biến x chạy các giá trị: 1, 3, 5 (mỗi lần tăng 2 đơn vị) |
+Bước nhảy Tùy chỉnh (Custom Step):
+
+**Loop** <for>(~x=1(2)&=6) [
+    | x nhận giá trị thuộc tập {1, 3, 5} |
 ]
+
 
 
 B. Vòng lặp Điều kiện (while Loop)
 
-Kết hợp giữa nhãn kiểm tra biểu thức @loop(...) và cờ cú pháp <for.f.whle>@also:
-
 @loop(biểu_thức_điều_kiện)
 **Loop** <for.f.whle>@also [
-    | Khối lệnh thực thi lặp lại |
+    | Khối lệnh thực thi lặp |
     <now>(giá_trị_mới)>biến_đếm
 ]
 
 
+
 VII. MÔ-ĐUN NẠP VÀ HỆ THỐNG PHẠM VI (MODULE IMPORT & SCOPE SYSTEM)
 
-1. Cú pháp Nạp Mô-đun (Import Syntax)
+1. Cú pháp Nạp Mô-đun (Powered by Import.java)
 
-Nạp mô-đun external hoặc hệ thống vào chương trình thông qua cấu trúc chỉ định phạm vi:
+$$\text{\textbf{Import}}(\$\text{ModuleName})\text{@also}\%\sim\text{Alias}!`\text{ScopeTag}`:\text{Alias}$$
 
-$$\text{**Import**}(\$\text{Tên\_Module})\text{@also}\%*\text{tên\_biến\_đại\_diện}!`\text{phạm\_vi}`:\text{tên\_biến\_đại\_diện}$$
+2. Quy định Thẻ Phạm vi Tầm vực (Scope Identifiers & Hierarchy)
 
-2. Bảng Mã Thẻ Phạm vi Tầm vực (Scope Identifiers)
+Tất cả các thẻ phạm vi bắt buộc được bao bọc trong cặp dấu backtick ` `. Hệ thống phạm vi thiết lập quan hệ bao hàm tập hợp:
 
-Thẻ tầm vực bắt buộc bọc trong dấu ngoặc backtick ` `:
+$$\mathcal{S}_{\text{global}} \supset \mathcal{S}_{\text{main}} \supset \mathcal{S}_{\text{func}} \supset \mathcal{S}_{\text{class}}$$
 
-Cú pháp Thẻ Phạm vi
+Cú pháp Thẻ Scope
 
-Tầm vực Tương ứng (Scope Level)
+Tầm vực Tương ứng
 
-Giải thích Ngữ nghĩa
+Mô tả Ngữ nghĩa Cụ thể
 
 `global`
 
 Global Scope
 
-Phạm vi toàn cục. Tất cả hàm, class, khối lệnh đều truy cập được.
+Phạm vi Toàn cục. Module/Biến được truy cập từ bất kỳ đâu.
 
 `a` hoặc `main`
 
@@ -299,141 +466,243 @@ Giới hạn tầm vực chỉ hoạt động bên trong Khối Main [ ].
 
 Function Scope
 
-Giới hạn tầm vực trong các Hàm nói chung.
+Giới hạn tầm vực bên trong các Hàm nói chung.
 
 `class`
 
 Class Scope
 
-Giới hạn tầm vực trong các Lớp nói chung.
+Giới hạn tầm vực bên trong các Lớp nói chung.
 
-`tên_hàm` / `Loop`
+`tên_hàm` / `hàm_đặc_biệt`
 
-Specific Scope
+Specific Context Scope
 
-Giới hạn tầm vực trong một Hàm cụ thể hoặc khối đặc biệt (như Loop).
+Phạm vi của một Hàm cụ thể hoặc từ khóa đặc biệt (như `Loop`).
 
 `tên_class`
 
 Specific Class Scope
 
-Giới hạn tầm vực bên trong một Lớp cụ thể.
+Phạm vi bên trong một Class cụ thể.
 
-3. Giao diện Thư viện Chuẩn (Standard Built-in Modules)
+3. Thư viện Chuẩn Built-in System Modules
 
-Thư viện Sinh số ngẫu nhiên (Random):
+Random Module ($Random):
 
-**Import**($Random)@also%*random!`global`:random
-int(<$random>(1, 100))*rand_val
-
-
-Thư viện Thao tác Tệp & Hệ thống (Os):
-
-**Import**($Os)@also%*os!`global`:os
-<$os>("data.txt")*file_var                     | Cấp phát và mở tập tin |
+**Import**($Random)@also%~random!`global`:random
+int(<$random>(1, 100))~rand_val
 
 
-Thư viện Mạng & Tên miền (Website):
 
-**Import**($Website)@also%*web!`global`:web
-<$web>("https://google.com")                   | Gửi truy vấn HTTP/URL |
-<$web>domain("example.com")@app_var           | Cấu hình Domain cho Server |
+OS Module ($Os):
+
+**Import**($Os)@also%~os!`global`:os
+<$os>("data.txt")~file_var
+
+
+
+Network & Web Module ($Website):
+
+**Import**($Website)@also%~web!`global`:web
+<$web>("https://google.com")
+<$web>domain("example.com")@app_var
+
 
 
 VIII. LẬP TRÌNH HƯỚNG ĐỐI TƯỢNG (OBJECT-ORIENTED PROGRAMMING - OOP)
 
-1. Định nghĩa Lớp (Class Definition)
+1. Cấu trúc Lớp (Class Definition)
 
-Sử dụng cú pháp định danh TênClass !class [ ].
+Cú pháp: TênClass !class [ ]
 
-2. Cơ chế Điều khiển Truy cập (Access Control)
+2. Cơ chế Điều khiển Truy cập (Encapsulation Rules)
 
-Public Access: Mặc định tất cả thuộc tính và phương thức nằm ngoài khối @private đều mang phạm vi truy cập Public. Ngôn ngữ không sử dụng thẻ @public.
+Public Level: Mặc định tất cả thuộc tính và phương thức khai báo bên ngoài khối @private có phạm vi Public. Ngôn ngữ không dùng thẻ @public.
 
-Private Access: Sử dụng khối đóng gói @private [ ] để bao bọc tất cả các thuộc tính và phương thức nội bộ. Các thành phần này không thể truy cập từ bên ngoài thể hiện.
+Private Level: Bao bọc bên trong khối @private [ ]. Mọi thành phần trong khối này chỉ có thể truy xuất từ bên trong chính Class đó.
 
 Monster !class [
 
     @private [
-        string("Dragon")*name
-        int(100)*hp
+        string("Dragon")~name
+        int(100)~hp
 
         take_damage() [
-            int(<$random>(15, 35))*damage
+            int(<$random>(15, 35))~damage
             <now>(hp - damage)>hp
 
-            <if>(hp > 50) [
+            <if>(hp > 50 && hp <= 100) [
                 <printf>^("Monster {name} trạng thái tốt! HP: {hp}")
             ]
-            <elif>(hp > 0) [
+            <elif>(hp > 0 %% hp <= 50) [
                 <printf>^("Monster {name} nguy kịch! HP: {hp}")
             ]
             <else> [
                 <printf>^("Monster {name} đã bị tiêu diệt!")
             ]
+            <return>(hp)
         ]
     ]
 ]
 
 
-3. Khởi tạo Thể hiện & Gọi Phương thức (Instantiation & Method Invocation)
 
-Cấp phát Thể hiện (Instantiation): *TênClass*tên_instance
+3. Khởi tạo Thể hiện & Gọi Phương thức (Instantiation & Method Directives)
 
-Gọi Phương thức (Method Call): $tên_instance*tên_phương_thức()
+Cấp phát Thể hiện (Instantiation): ~TênClass~tên_instance
 
-*Monster*m1         | Cấp phát thể hiện m1 thuộc Lớp Monster |
-$m1*take_damage()   | Gọi phương thức take_damage của m1 |
+Gọi Phương thức (Method Call): $tên_instance~tên_phương_thức()
+
+~Monster~m1
+int($m1~take_damage())~remaining_hp
 
 
-IX. MÃ NGUỒN CHƯƠNG TRÌNH HOÀN CHỈNH (COMPLETE CODE SPECIFICATION DEMO)
+
+IX. CƠ CHẾ XỬ LÝ LỖI VÀ NGOẠI LỆ (ERROR & EXCEPTION HANDLING - <catch>)
+
+1. Cú pháp Khai báo Thẻ <catch>
+
+$$\text{\texttt{<catch>}}(\text{\texttt{`ErrorCode`} \ \lor \ \text{Condition}}) \ [ \ \text{Khối\_Lệnh\_Xử\_Lý} \ ]$$
+
+Chỉ định Ngoại lệ theo Tên Lỗi:
+
+<catch>(`DivideByZeroError`) [
+    <printf>^("Cảnh báo: Lỗi chia cho 0!")
+]
+
+
+
+Chỉ định Ngoại lệ theo Biểu thức Điều kiện:
+
+<catch>(status_code == 500 %% status_code == 503) [
+    <printf>^("Cảnh báo: Máy chủ ngưng phục vụ!")
+]
+
+
+
+2. Quy tắc Quét Ngược Đa Khối và Chuỗi Catch (Catch Handling Rules)
+
+Cơ chế Quét Ngược Đa Khối (Sequential Upward Scope Catching Rule):
+Thẻ <catch> hoạt động như một "phễu bắt lỗi ngược". Khi đặt bên dưới, runtime engine sẽ quét ngược từ vị trí đặt <catch> lên phía trên và bảo vệ toàn bộ các câu lệnh, khối lệnh hoặc danh sách hàm đứng liền trước nó trong cùng scope.
+
+Quy tắc Phân giải Chuỗi Catch (Sequential Cascade Rule):
+Khi có nhiều thẻ <catch> đặt nối tiếp nhau, compiler.py sẽ duyệt đánh giá theo thứ tự từ trên xuống dưới (First-Matched, First-Served). Thẻ đầu tiên có mã lỗi/điều kiện khớp với sự cố sẽ nhận xử lý và chấm dứt chuỗi catch.
+
+Ví dụ Bắt lỗi cho Đa Hàm:
+
+fun() [
+    | Các lệnh trong hàm fun |
+]
+
+fun_t() [
+    | Các lệnh trong hàm fun_t |
+]
+
+| Thẻ catch dưới đây quét ngược và bắt lỗi cho CẢ fun() lẫn fun_t() |
+<catch>(`DivideByZeroError`) [
+    <printf>^("Đã bắt lỗi DivideByZeroError từ fun() hoặc fun_t()!")
+]
+<catch>(`SystemException`) [
+    <printf>^("Bắt lỗi hệ thống tổng quát!")
+]
+
+
+
+3. Cấu trúc Biến Ngoại lệ Nội tại (error Dictionary)
+
+Khi khối <catch> được kích hoạt, hệ thống tự động khởi tạo Dictionary nội bộ tên error:
+
+error<"line">: Số dòng trong file mã nguồn phát sinh ngoại lệ.
+
+error<"code">: Đoạn mã nguồn .ko trực tiếp gây ra ngoại lệ.
+
+error<"type">: Tên định danh chuẩn của ngoại lệ (DivideByZeroError, SystemException, ...).
+
+<catch>(`DivideByZeroError`) [
+    <printf>^("Lỗi tại dòng {error<"line">}: {error<"code">}")
+]
+
+
+
+X. CHƯƠNG TRÌNH MẪU HOÀN CHỈNH (COMPLETE SYSTEM DEMO PROGRAM)
 
 | ========================================================== |
-| 1. Nạp các Thư viện Chuẩn vào Scope Toàn cục (Global)      |
+| 1. Nạp Thư viện Chuẩn (Xử lý bởi Import.java Subsystem)    |
 | ========================================================== |
-**Import**($Random)@also%*random!`global`:random
-**Import**($Os)@also%*os!`global`:os
-**Import**($Website)@also%*web!`global`:web
+**Import**($Random)@also%~random!`global`:random
+**Import**($Os)@also%~os!`global`:os
+**Import**($Website)@also%~web!`global`:web
 
 | ========================================================== |
-| 2. Định nghĩa Hàm Khởi tạo Hệ thống (Function Definition)  |
+| 2. Định nghĩa các Hàm Hệ thống                             |
 | ========================================================== |
 init_system_logs() [
     <printf>^("=== KHOI TAO HE THONG .KO ===")
-    <$os>("log.txt")*log_file
+    <$os>("log.txt")~log_file
     <$web>domain("mygame.com")@app_server
     <$web>("https://api.mygame.com/status")
+    <return>(\True\)
+]
+
+safe_divide(int~dividend, int~divisor) [
+    int(dividend / divisor)~result
+    int(dividend % divisor)~remainder
+    <printf>^("Thương: {result}, Dư: {remainder}")
+    <return>(result)
+]
+
+calculate_crit_damage(int~base_dmg, int~bonus_dmg) [
+    int((base_dmg + bonus_dmg) * 2)~crit_dmg
+    <return>(crit_dmg)
+]
+
+| ---------------------------------------------------------- |
+| Catch chuỗi: Duyệt Top-Down (Sequential Cascade Rule)      |
+| Quét ngược bảo vệ cả 3 hàm: init_system_logs, safe_divide, |
+| và calculate_crit_damage                                  |
+| ---------------------------------------------------------- |
+<catch>(`DivideByZeroError`) [
+    <printf>^("Lỗi {error<"type">} tại dòng {error<"line">}: {error<"code">}. Trả về 0.")
+    <return>(0)
+]
+<catch>(`SystemException`) [
+    <printf>^("Bắt lỗi hệ thống tổng quát phát sinh trong các hàm!")
+    <return>(-1)
 ]
 
 | ========================================================== |
-| 3. Định nghĩa Lớp Hero (Class & OOP Specification)         |
+| 3. Định nghĩa Lớp Hero (OOP System)                        |
 | ========================================================== |
 Hero !class [
     @private [
-        string("")*name
-        int(100)*hp
-        ('Kiem', 'Khien', 'Binh mau')*inventory
+        string("")~name
+        int(100)~hp
+        ('Kiem', 'Khien', 'Binh mau')~inventory
 
         setup_player() [
             <input>("Nhap ten anh hung cua ban: ")&=name
             <printf>^("Chao mung anh hung {name} den voi the gioi .ko!")
+            <return>(name)
         ]
 
         use_random_item() [
-            int(<$random>(0, 2))*item_index
+            int(<$random>(0, 2))~item_index
             <printf>^("Hero {name} used item: {inventory<{item_index}>}")
+            <return>(inventory<{item_index}>)
         ]
 
         check_status() [
-            <if>(hp >= 80) [
+            <if>(hp >= 80 && hp <= 100) [
                 <printf>^("Trang thai: Rat khoe")
             ]
-            <elif>(hp >= 30) [
+            <elif>(hp >= 30 %% hp < 80) [
                 <printf>^("Trang thai: Binh thuong")
             ]
             <else> [
                 <printf>^("Trang thai: Nguy hiem!")
             ]
+            <return>(hp)
         ]
     ]
 ]
@@ -442,16 +711,31 @@ Hero !class [
 | 4. Khối Thực thi Chính (Main Entry Point Block)           |
 | ========================================================== |
 [
-    *init_system_logs()
+    booling(~init_system_logs())~is_ready
     
-    *Hero*p1
-    $p1*setup_player()
+    ~Hero~p1
+    string($p1~setup_player())~player_name
     
-    | Vòng lặp đếm i từ 1 đến 5 với bước nhảy +2 |
-    **Loop** <for>(*i=1(2)&=5) [
+    | Thử nghiệm hàm safe_divide với phép chia cho 0 |
+    int(~safe_divide(100, 0))~calc_test
+    <printf>^("Kết quả kiểm tra chia an toàn: {calc_test}")
+
+    | Vòng lặp đếm i từ 1 đến 5 (Xử lý bởi Loop.cpp Subsystem) |
+    **Loop** <for>(~i=1(2)&=5) [
         <printf>^("--- Turn {i} ---")
-        $p1*use_random_item()
+        string($p1~use_random_item())~used_item
     ]
     
-    $p1*check_status()
+    int($p1~check_status())~current_hp
+    int(~calculate_crit_damage(50, 10))~final_strike
+    <printf>^("Sát thương chí mạng tính toán được: {final_strike}")
+
+    | Thao tác bộ nhớ trực tiếp và giải phóng vùng nhớ |
+    int(999)~temp_data
+    <printf>^("Địa chỉ ô nhớ temp_data: {<memory>^temp_data}")
+    <memory>dete(temp_data)
 ]
+<catch>(`GlobalError`) [
+    <printf>^("Bắt lỗi ngoại lệ toàn cục tại dòng {error<"line">}: {error<"code">}")
+]
+

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import ast
+import enum
 import os
 import re
 import sys
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
 
 
 class KoCompileError(Exception):
@@ -16,495 +18,1464 @@ class KoCompileError(Exception):
         self.column = column
 
 
-def _split_args(text: str) -> List[str]:
-    """Split comma-separated .ko arguments while respecting strings and nesting."""
-    parts: List[str] = []
-    current: List[str] = []
-    stack: List[str] = []
-    quote = ""
-    escape = False
-    pairs = {"(": ")", "[": "]", "{": "}", "<": ">"}
-    for char in text:
-        if quote:
-            current.append(char)
-            if escape:
-                escape = False
-            elif char == "\\":
-                escape = True
-            elif char == quote:
-                quote = ""
-            continue
-        if char in ('"', "'"):
-            quote = char
-            current.append(char)
-            continue
-        if char in pairs:
-            stack.append(pairs[char])
-            current.append(char)
-            continue
-        if stack and char == stack[-1]:
-            stack.pop()
-            current.append(char)
-            continue
-        if char == "," and not stack:
-            parts.append("".join(current).strip())
-            current = []
-            continue
-        current.append(char)
-    tail = "".join(current).strip()
-    if tail:
-        parts.append(tail)
-    return parts
+class TokenType(enum.Enum):
+    # Literals
+    INT = "INT"
+    FREAL = "FREAL"
+    STRING = "STRING"
+    BOOL = "BOOL"
+    BYTE = "BYTE"
+    ID = "ID"
+
+    # Keywords
+    IMPORT = "Import"
+    LOOP = "Loop"
+    CLASS = "!class"
+    PRIVATE = "@private"
+    LOOP_CTRL = "@loop"
+    ALSO = "@also"
+    IF = "<if>"
+    ELIF = "<elif>"
+    ELSE = "<else>"
+    RETURN = "<return>"
+    CATCH = "<catch>"
+    MEMORY = "<memory>"
+    NOW = "<now>"
+    PRINT = "<print>"
+    PRINTF = "<printf>"
+    INPUT = "<input>"
+    FOR = "<for>"
+    WHILE_ALSO = "<for.f.whle>@also"
+
+    # Sigils & Delimiters
+    TILDE = "~"
+    DOLLAR = "$"
+    LBRACKET = "["
+    RBRACKET = "]"
+    LPAREN = "("
+    RPAREN = ")"
+    LBRACE = "{"
+    RBRACE = "}"
+    LANGLE = "<"
+    RANGLE = ">"
+    COMMA = ","
+    BACKTICK = "`"
+    COLON = ":"
+    CARET = "^"
+    BANG = "!"
+
+    # Operators
+    PLUS = "+"
+    MINUS = "-"
+    STAR = "*"
+    SLASH = "/"
+    PERCENT = "%"
+    AND = "&&"
+    OR = "%%"
+    ASSIGN_INPUT = "&="
+    ASSIGN = "="
+    GT = ">"
+    EQ = "=="
+    NE = "!="
+    GE = ">="
+    LE = "<="
+
+    EOF = "EOF"
 
 
-def _translate_data_literal(expr: str) -> str:
-    expr = expr.strip()
-    if not (expr.startswith("(") and expr.endswith(")")):
+@dataclass
+class Token:
+    type: TokenType
+    value: Any
+    line: int
+    column: int
+
+
+class KoLexer:
+    def __init__(self, source: str):
+        self.source = source
+        self.pos = 0
+        self.line = 1
+        self.column = 1
+        self.tokens: List[Token] = []
+        self.quote_stack = []
+
+    def _error(self, message: str):
+        raise KoCompileError(message, self.line, self.column)
+
+    def _peek(self, offset: int = 0) -> str:
+        if self.pos + offset >= len(self.source):
+            return ""
+        return self.source[self.pos + offset]
+
+    def _advance(self) -> str:
+        char = self._peek()
+        self.pos += 1
+        if char == "\n":
+            self.line += 1
+            self.column = 1
+        else:
+            self.column += 1
+        return char
+
+    def tokenize(self) -> List[Token]:
+        while self.pos < len(self.source):
+            char = self._peek()
+
+            if char.isspace():
+                self._advance()
+                continue
+            
+            # Multi-char operators first
+            if char == "&" and self._peek(1) == "&":
+                self.tokens.append(Token(TokenType.AND, "&&", self.line, self.column))
+                self._advance(); self._advance()
+                continue
+            if char == "%" and self._peek(1) == "%":
+                self.tokens.append(Token(TokenType.OR, "%%", self.line, self.column))
+                self._advance(); self._advance()
+                continue
+            if char == "&" and self._peek(1) == "=":
+                self.tokens.append(Token(TokenType.ASSIGN_INPUT, "&=", self.line, self.column))
+                self._advance(); self._advance()
+                continue
+            if char == "=" and self._peek(1) == "=":
+                self.tokens.append(Token(TokenType.EQ, "==", self.line, self.column))
+                self._advance(); self._advance()
+                continue
+            if char == "!" and self._peek(1) == "=":
+                self.tokens.append(Token(TokenType.NE, "!=", self.line, self.column))
+                self._advance(); self._advance()
+                continue
+            if char == ">" and self._peek(1) == "=":
+                self.tokens.append(Token(TokenType.GE, ">=", self.line, self.column))
+                self._advance(); self._advance()
+                continue
+            if char == "<" and self._peek(1) == "=":
+                self.tokens.append(Token(TokenType.LE, "<=", self.line, self.column))
+                self._advance(); self._advance()
+                continue
+            
+            if self.quote_stack and char == "}":
+                self.tokens.append(Token(TokenType.RBRACE, "}", self.line, self.column))
+                self._advance()
+                self._tokenize_string_fragment(self.quote_stack.pop())
+                continue
+
+            if char == "|":
+                self._advance()
+                while self._peek() and self._peek() != "|":
+                    self._advance()
+                if self._peek() == "|":
+                    self._advance()
+                continue
+
+            # Special Tags and Keywords
+            if char == "<":
+                text = ""
+                start_col = self.column
+                # Peak ahead to see if it's a known tag
+                temp_pos = self.pos
+                temp_text = ""
+                while temp_pos < len(self.source) and not self.source[temp_pos].isspace() and self.source[temp_pos] not in "()^":
+                    temp_text += self.source[temp_pos]
+                    temp_pos += 1
+                    if self.source[temp_pos-1] == ">": break
+                
+                tag_map = {
+                    "<if>": TokenType.IF,
+                    "<elif>": TokenType.ELIF,
+                    "<else>": TokenType.ELSE,
+                    "<return>": TokenType.RETURN,
+                    "<catch>": TokenType.CATCH,
+                    "<memory>": TokenType.MEMORY,
+                    "<now>": TokenType.NOW,
+                    "<print>": TokenType.PRINT,
+                    "<printf>": TokenType.PRINTF,
+                    "<input>": TokenType.INPUT,
+                    "<for>": TokenType.FOR,
+                    "<for.f.whle>@also": TokenType.WHILE_ALSO,
+                }
+                
+                if temp_text in tag_map:
+                    for _ in range(len(temp_text)): self._advance()
+                    self.tokens.append(Token(tag_map[temp_text], temp_text, self.line, start_col))
+                    continue
+                
+                self.tokens.append(Token(TokenType.LANGLE, "<", self.line, start_col))
+                self._advance()
+                continue
+
+            if char == "\\":
+                start_col = self.column
+                self._advance()
+                text = ""
+                while self._peek() and self._peek() != "\\":
+                    text += self._advance()
+                if self._peek() == "\\":
+                    self._advance()
+                    if text == "True":
+                        self.tokens.append(Token(TokenType.BOOL, True, self.line, start_col))
+                    elif text == "False":
+                        self.tokens.append(Token(TokenType.BOOL, False, self.line, start_col))
+                    else:
+                        self._error(f"Invalid boolean literal: \\{text}\\")
+                    continue
+                else:
+                    self._error("Unterminated boolean literal")
+
+            if char.isdigit():
+                start_col = self.column
+                num_str = ""
+                while self._peek().isdigit() or self._peek() == ".":
+                    num_str += self._advance()
+                if "." in num_str:
+                    self.tokens.append(Token(TokenType.FREAL, float(num_str), self.line, start_col))
+                else:
+                    self.tokens.append(Token(TokenType.INT, int(num_str), self.line, start_col))
+                continue
+
+            if char.isalpha() or char == "_" or char == "@" or char == "!" or (char == "*" and self._peek(1) == "*"):
+                start_col = self.column
+                text = ""
+                if char == "*" and self._peek(1) == "*":
+                    for _ in range(2): text += self._advance()
+                    while self._peek().isalpha(): text += self._advance()
+                    if self._peek() == "*" and self._peek(1) == "*":
+                        for _ in range(2): text += self._advance()
+                elif char == "!":
+                    text += self._advance()
+                    while self._peek().isalpha(): text += self._advance()
+                # Keep IDs together if they contain * or ~ (sigils in the middle)
+                while self._peek().isalnum() or self._peek() in "_@*~":
+                    text += self._advance()
+                
+                kw_map = {
+                    "Import": TokenType.IMPORT,
+                    "Loop": TokenType.LOOP,
+                    "!class": TokenType.CLASS,
+                    "@private": TokenType.PRIVATE,
+                    "@loop": TokenType.LOOP_CTRL,
+                    "@also": TokenType.ALSO,
+                    "int": TokenType.ID,
+                    "freal": TokenType.ID,
+                    "string": TokenType.ID,
+                    "booling": TokenType.ID,
+                    "byte": TokenType.ID,
+                    "!": TokenType.BANG,
+                }
+                
+                if text == "**Loop**":
+                    self.tokens.append(Token(TokenType.LOOP, text, self.line, start_col))
+                elif text == "**Import**":
+                    self.tokens.append(Token(TokenType.IMPORT, text, self.line, start_col))
+                elif text in kw_map:
+                    self.tokens.append(Token(kw_map[text], text, self.line, start_col))
+                else:
+                    self.tokens.append(Token(TokenType.ID, text, self.line, start_col))
+                continue
+
+            if char in "\"'":
+                self._tokenize_string_fragment(self._advance())
+                continue
+
+            if char in "~*":
+                self.tokens.append(Token(TokenType.TILDE, char, self.line, self.column))
+                self._advance()
+                continue
+            char_map = {
+                "~": TokenType.TILDE,
+                "*": TokenType.TILDE,
+                "$": TokenType.DOLLAR,
+                "[": TokenType.LBRACKET,
+                "]": TokenType.RBRACKET,
+                "(": TokenType.LPAREN,
+                ")": TokenType.RPAREN,
+                "{": TokenType.LBRACE,
+                "}": TokenType.RBRACE,
+                ">": TokenType.RANGLE,
+                ",": TokenType.COMMA,
+                "`": TokenType.BACKTICK,
+                ":": TokenType.COLON,
+                "^": TokenType.CARET,
+                "!": TokenType.BANG,
+                "=": TokenType.ASSIGN,
+                "+": TokenType.PLUS,
+                "-": TokenType.MINUS,
+                "*": TokenType.STAR,
+                "/": TokenType.SLASH,
+                "%": TokenType.PERCENT,
+            }
+            
+            if char in char_map:
+                self.tokens.append(Token(char_map[char], char, self.line, self.column))
+                self._advance()
+                continue
+
+            self._error(f"Unexpected character: {char}")
+
+        self.tokens.append(Token(TokenType.EOF, None, self.line, self.column))
+        return self.tokens
+
+    def _tokenize_string_fragment(self, quote: str):
+        start_col = self.column
+        content = ""
+        while self._peek() and self._peek() != quote:
+            if self._peek() == "{":
+                if content:
+                    self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
+                self.tokens.append(Token(TokenType.LBRACE, "{", self.line, self.column))
+                self._advance()
+                self.quote_stack.append(quote)
+                return
+            
+            if self._peek() == "\\":
+                self._advance()
+                content += self._advance()
+            else:
+                content += self._advance()
+        
+        if self._peek() == quote:
+            self._advance()
+            self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
+        else:
+            self._error("Unterminated string literal")
+
+
+# AST Nodes
+class Node:
+    pass
+
+class Expr(Node):
+    pass
+
+@dataclass
+class Literal(Expr):
+    value: Any
+
+@dataclass
+class Identifier(Expr):
+    name: str
+
+@dataclass
+class BinaryOp(Expr):
+    left: Expr
+    op: TokenType
+    right: Expr
+
+@dataclass
+class UnaryOp(Expr):
+    op: TokenType
+    expr: Expr
+
+@dataclass
+class Indexing(Expr):
+    target: Expr
+    index: List[Expr]
+
+@dataclass
+class Call(Expr):
+    name: str
+    args: List[Expr]
+    is_instance_method: bool = False
+    instance: Optional[str] = None
+    target: Optional[str] = None
+
+@dataclass
+class TupleLiteral(Expr):
+    elements: List[Expr]
+
+@dataclass
+class DictLiteral(Expr):
+    mapping: Dict[Expr, Expr]
+
+class Stmt(Node):
+    pass
+
+@dataclass
+class VarDecl(Stmt):
+    type_name: str
+    initializer: Expr
+    name: str
+
+@dataclass
+class Assignment(Stmt):
+    target: Identifier
+    value: Expr
+
+@dataclass
+class NowMutation(Stmt):
+    expr: Expr
+    target: Identifier
+
+@dataclass
+class IfStmt(Stmt):
+    condition: Expr
+    body: List[Stmt]
+    else_body: Optional[List[Stmt] | IfStmt] = None
+
+@dataclass
+class ForLoop(Stmt):
+    var_name: str
+    start: Expr
+    end: Expr
+    body: List[Stmt]
+    step: Optional[Expr] = None
+
+@dataclass
+class WhileLoop(Stmt):
+    condition: Expr
+    body: List[Stmt]
+
+@dataclass
+class FuncDecl(Stmt):
+    name: str
+    params: List[VarDecl]
+    body: List[Stmt]
+
+@dataclass
+class ClassDecl(Stmt):
+    name: str
+    body: List[Stmt]
+    private_body: List[Stmt] = field(default_factory=list)
+
+@dataclass
+class ImportStmt(Stmt):
+    module_name: str
+    alias: str
+    scope_tag: str
+
+@dataclass
+class CatchStmt(Stmt):
+    error_condition: Union[str, Expr] # ErrorCode in backticks or Expr
+    body: List[Stmt]
+
+@dataclass
+class MainBlock(Stmt):
+    body: List[Stmt]
+
+@dataclass
+class Program(Node):
+    imports: List[ImportStmt]
+    decls: List[Union[FuncDecl, ClassDecl]]
+    main: Optional[MainBlock]
+    catch_blocks: List[CatchStmt]
+
+
+class KoParser:
+    def __init__(self, tokens: List[Token]):
+        self.tokens = tokens
+        print(tokens) # Debug
+        self.pos = 0
+
+    def _error(self, message: str):
+        token = self._peek()
+        raise KoCompileError(message, token.line, token.column)
+
+    def _peek(self, offset: int = 0) -> Token:
+        if self.pos + offset >= len(self.tokens):
+            return self.tokens[-1]
+        return self.tokens[self.pos + offset]
+
+    def _advance(self) -> Token:
+        token = self._peek()
+        self.pos += 1
+        return token
+
+    def _check(self, type: TokenType) -> bool:
+        return self._peek().type == type
+
+    def _match(self, *types: TokenType) -> bool:
+        for t in types:
+            if self._check(t):
+                self._advance()
+                return True
+        return False
+
+    def _consume(self, type: TokenType, message: str) -> Token:
+        print(f"Consuming {type}, current is {self._peek()}") # Debug
+        if self._check(type):
+            return self._advance()
+        self._error(message)
+
+    def parse(self) -> Program:
+        imports = []
+        decls = []
+        main = None
+        catch_blocks = []
+
+        while not self._check(TokenType.EOF):
+            if self._check(TokenType.IMPORT):
+                imports.append(self.parse_import())
+            elif self._check(TokenType.ID) and self._peek(1).type == TokenType.CLASS:
+                decls.append(self.parse_class())
+            elif self._check(TokenType.ID) and self._peek(1).type == TokenType.LPAREN:
+                decls.append(self.parse_function())
+            elif self._check(TokenType.ID) and self._peek(1).type == TokenType.LBRACKET:
+                decls.append(self.parse_function()) # Function with no params
+            elif self._check(TokenType.LBRACKET):
+                if main is not None:
+                    self._error("Multiple main blocks found")
+                main = self.parse_main_block()
+            elif self._check(TokenType.CATCH):
+                catch_blocks.append(self.parse_catch())
+            else:
+                token = self._peek()
+                self._error(f"Global scope execution constraint violation: unexpected statement '{token.value}' at top level")
+
+        return Program(imports, decls, main, catch_blocks)
+
+    def parse_import(self) -> ImportStmt:
+        self._consume(TokenType.IMPORT, "Expected Import")
+        self._consume(TokenType.LPAREN, "Expected (")
+        self._consume(TokenType.DOLLAR, "Expected $")
+        module_name = self._consume(TokenType.ID, "Expected module name").value
+        self._consume(TokenType.RPAREN, "Expected )")
+        self._consume(TokenType.ALSO, "Expected @also")
+        self._consume(TokenType.PERCENT, "Expected %")
+        self._consume(TokenType.TILDE, "Expected ~")
+        alias = self._consume(TokenType.ID, "Expected alias").value
+        self._consume(TokenType.BANG, "Expected !")
+        self._consume(TokenType.BACKTICK, "Expected `")
+        scope_tag = self._consume(TokenType.ID, "Expected scope tag").value
+        self._consume(TokenType.BACKTICK, "Expected `")
+        self._consume(TokenType.COLON, "Expected :")
+        self._consume(TokenType.ID, "Expected final alias")
+        return ImportStmt(module_name, alias, scope_tag)
+
+    def parse_class(self) -> ClassDecl:
+        name = self._consume(TokenType.ID, "Expected class name").value
+        self._consume(TokenType.CLASS, "Expected !class")
+        self._consume(TokenType.LBRACKET, "Expected [")
+        
+        body = []
+        private_body = []
+        while not self._check(TokenType.RBRACKET) and not self._check(TokenType.EOF):
+            if self._check(TokenType.PRIVATE):
+                private_body.extend(self.parse_private_block())
+            else:
+                body.append(self.parse_statement())
+        
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        return ClassDecl(name, body, private_body)
+
+    def parse_private_block(self) -> List[Stmt]:
+        self._consume(TokenType.PRIVATE, "Expected @private")
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET) and not self._check(TokenType.EOF):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        return body
+
+    def parse_function(self) -> FuncDecl:
+        name = self._consume(TokenType.ID, "Expected function name").value
+        params = []
+        if self._match(TokenType.LPAREN):
+            if not self._check(TokenType.RPAREN):
+                while True:
+                    params.append(self.parse_var_decl_param())
+                    if not self._match(TokenType.COMMA):
+                        break
+            self._consume(TokenType.RPAREN, "Expected )")
+        
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET) and not self._check(TokenType.EOF):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        return FuncDecl(name, params, body)
+
+    def parse_var_decl_param(self) -> VarDecl:
+        type_name = self._consume(TokenType.ID, "Expected type").value
+        self._consume(TokenType.TILDE, "Expected ~")
+        name = self._consume(TokenType.ID, "Expected param name").value
+        return VarDecl(type_name, None, name)
+
+    def parse_main_block(self) -> MainBlock:
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET) and not self._check(TokenType.EOF):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        return MainBlock(body)
+
+    def parse_catch(self) -> CatchStmt:
+        self._consume(TokenType.CATCH, "Expected <catch>")
+        self._consume(TokenType.LPAREN, "Expected (")
+        
+        if self._match(TokenType.BACKTICK):
+            error_code = self._consume(TokenType.ID, "Expected error code").value
+            self._consume(TokenType.BACKTICK, "Expected `")
+            self._consume(TokenType.RPAREN, "Expected )")
+            condition = error_code
+        else:
+            condition = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+            self._consume(TokenType.RPAREN, "Expected )")
+        
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET) and not self._check(TokenType.EOF):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        return CatchStmt(condition, body)
+
+    def parse_statement(self) -> Stmt:
+        if self._check(TokenType.ID) and self._peek(1).type == TokenType.LPAREN:
+            # Check if it's a function decl or var decl
+            # ID(expr)~name is var decl
+            # ID(...) [ is function decl
+            # Search for [ or ~
+            temp_pos = self.pos + 2
+            nesting = 1
+            is_func = False
+            while temp_pos < len(self.tokens):
+                t = self.tokens[temp_pos]
+                if t.type == TokenType.LPAREN: nesting += 1
+                elif t.type == TokenType.RPAREN:
+                    nesting -= 1
+                    if nesting == 0:
+                        if self._peek(temp_pos - self.pos + 1).type == TokenType.LBRACKET:
+                            is_func = True
+                        break
+                temp_pos += 1
+            if is_func:
+                return self.parse_function()
+            else:
+                return self.parse_var_decl()
+
+        if self._check(TokenType.IF):
+            return self.parse_if()
+        elif self._check(TokenType.CATCH):
+            return self.parse_catch()
+        elif self._check(TokenType.LOOP_CTRL):
+            return self.parse_while()
+        elif self._check(TokenType.LOOP):
+            return self.parse_for()
+        elif self._check(TokenType.NOW):
+            return self.parse_now()
+        elif self._check(TokenType.MEMORY):
+            return self.parse_memory()
+        elif self._check(TokenType.PRINT) or self._check(TokenType.PRINTF):
+            return self.parse_print()
+        elif self._check(TokenType.INPUT):
+            return self.parse_input()
+        elif self._check(TokenType.RETURN):
+            return self.parse_return()
+        elif self._match(TokenType.STAR):
+            # Might be method call or instantiation or function call
+            return self.parse_call_or_instantiation()
+        elif self._check(TokenType.DOLLAR):
+            return self.parse_call_or_instantiation()
+        elif self._check(TokenType.ID):
+            # Might be VarDecl or Assignment or Instance method call
+            if self._peek(1).type == TokenType.LPAREN:
+                # Type(val)~name
+                return self.parse_var_decl()
+            elif self._peek(1).type == TokenType.STAR:
+                # Assignment or method call handled elsewhere
+                pass
+        
+        # Default to expression statement or assignment
+        expr = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        if self._match(TokenType.TILDE):
+            # Expression ~ Identifier (Assignment or VarDecl without type)
+            target = self._consume(TokenType.ID, "Expected target identifier").value
+            return Assignment(Identifier(target), expr)
+        
+        return expr # This would be an expression stmt
+
+    def parse_var_decl(self) -> VarDecl:
+        type_name = self._consume(TokenType.ID, "Expected type name").value
+        self._consume(TokenType.LPAREN, "Expected (")
+        initializer = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        self._consume(TokenType.TILDE, "Expected ~")
+        name = self._consume(TokenType.ID, "Expected variable name").value
+        return VarDecl(type_name, initializer, name)
+
+    def parse_if(self) -> IfStmt:
+        self._consume(TokenType.IF, "Expected <if>")
+        self._consume(TokenType.LPAREN, "Expected (")
+        condition = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        
+        else_body = None
+        if self._check(TokenType.ELIF):
+            else_body = self.parse_elif()
+        elif self._check(TokenType.ELSE):
+            else_body = self.parse_else()
+        
+        return IfStmt(condition, body, else_body)
+
+    def parse_elif(self) -> IfStmt:
+        self._consume(TokenType.ELIF, "Expected <elif>")
+        self._consume(TokenType.LPAREN, "Expected (")
+        condition = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        
+        else_body = None
+        if self._check(TokenType.ELIF):
+            else_body = self.parse_elif()
+        elif self._check(TokenType.ELSE):
+            else_body = self.parse_else()
+        
+        return IfStmt(condition, body, else_body)
+
+    def parse_else(self) -> List[Stmt]:
+        self._consume(TokenType.ELSE, "Expected <else>")
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        return body
+
+    def parse_for(self) -> ForLoop:
+        self._consume(TokenType.LOOP, "Expected **Loop**")
+        self._consume(TokenType.FOR, "Expected <for>")
+        self._consume(TokenType.LPAREN, "Expected (")
+        self._consume(TokenType.TILDE, "Expected ~")
+        var_name = self._consume(TokenType.ID, "Expected loop variable").value
+        self._consume(TokenType.STAR, "Actually it's = in spec for loop?") # Spec: <for>(~x=1&=6)
+        # Wait, the spec says =. My lexer might not have =.
+        # Fixed in thought: I'll add EQ as = and match it.
+        # But wait, spec uses = for assignment in for loop.
+        # I'll use the ID or custom match.
+        # Re-reading spec: <for>(~x=1&=6)
+        # I'll just skip the '=' if it's there.
+        self._consume(TokenType.ASSIGN, "Expected =")
+        
+        start = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        
+        step = None
+        if self._match(TokenType.LPAREN):
+            step = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+            self._consume(TokenType.RPAREN, "Expected )")
+        
+        self._consume(TokenType.ASSIGN_INPUT, "Expected &=")
+        end = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        
+        return ForLoop(var_name, start, end, step, body)
+
+    def parse_while(self) -> WhileLoop:
+        # @loop(cond) **Loop** <for.f.whle>@also [ ... ]
+        self._consume(TokenType.LOOP_CTRL, "Expected @loop")
+        self._consume(TokenType.LPAREN, "Expected (")
+        condition = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        
+        self._consume(TokenType.LOOP, "Expected **Loop**")
+        self._consume(TokenType.WHILE_ALSO, "Expected <for.f.whle>@also")
+        
+        self._consume(TokenType.LBRACKET, "Expected [")
+        body = []
+        while not self._check(TokenType.RBRACKET):
+            body.append(self.parse_statement())
+        self._consume(TokenType.RBRACKET, "Expected ]")
+        
+        return WhileLoop(condition, body)
+
+    def parse_now(self) -> NowMutation:
+        self._consume(TokenType.NOW, "Expected <now>")
+        self._consume(TokenType.LPAREN, "Expected (")
+        expr = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        self._consume(TokenType.GT, "Expected >")
+        target = self._consume(TokenType.ID, "Expected target variable").value
+        return NowMutation(expr, Identifier(target))
+
+    def parse_expression(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        return self.parse_logical_or(stop_tokens)
+
+    def parse_logical_or(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        expr = self.parse_logical_and(stop_tokens)
+        while self._check_not_stop(TokenType.OR, stop_tokens) and self._match(TokenType.OR):
+            op = TokenType.OR
+            right = self.parse_logical_and(stop_tokens)
+            expr = BinaryOp(expr, op, right)
         return expr
-    inner = expr[1:-1].strip()
-    dict_match = re.fullmatch(r"(.+?)\s*\{(.+)\}", inner)
-    if dict_match:
-        return "{" + f"{_translate_expression(dict_match.group(1))}: {_translate_expression(dict_match.group(2))}" + "}"
-    parts = _split_args(inner)
-    if len(parts) == 1:
-        nested = re.fullmatch(r"(.+?)\s*\((.*)\)", parts[0])
-        if nested:
-            return f"({_translate_expression(nested.group(1))}, {_translate_data_literal('(' + nested.group(2) + ')')})"
-    return "(" + ", ".join(_translate_expression(part) for part in parts) + ("," if len(parts) == 1 else "") + ")"
 
+    def parse_logical_and(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        expr = self.parse_comparison(stop_tokens)
+        while self._check_not_stop(TokenType.AND, stop_tokens) and self._match(TokenType.AND):
+            op = TokenType.AND
+            right = self.parse_comparison(stop_tokens)
+            expr = BinaryOp(expr, op, right)
+        return expr
 
-def _translate_index_access(expr: str) -> str:
-    pattern = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)<([^<>]+)(?:<([^<>]+)>)?>")
-    while True:
-        def replace_index(match: re.Match[str]) -> str:
-            first = _translate_expression(match.group(2)).strip()
-            second = _translate_expression(match.group(3)).strip() if match.group(3) is not None else None
-            if first.startswith("{") and first.endswith("}"):
-                first = first[1:-1].strip()
-            if second is not None and second.startswith("{") and second.endswith("}"):
-                second = second[1:-1].strip()
-            if second is None:
-                return f"{match.group(1)}[{first}]"
-            return f"{match.group(1)}[{first}][{second}]"
+    def parse_comparison(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        expr = self.parse_term(stop_tokens)
+        while True:
+            if not self._match(TokenType.GT, TokenType.GE, TokenType.LE, TokenType.EQ, TokenType.NE):
+                break
+            op = self.tokens[self.pos-1].type
+            if stop_tokens and op in stop_tokens:
+                self.pos -= 1 # Backtrack
+                break
+            right = self.parse_term(stop_tokens)
+            expr = BinaryOp(expr, op, right)
+        return expr
 
-        replaced = pattern.sub(replace_index, expr)
-        if replaced == expr:
-            return expr
-        expr = replaced
+    def parse_term(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        expr = self.parse_factor(stop_tokens)
+        while self._check_not_stop(TokenType.PLUS, TokenType.MINUS, stop_tokens=stop_tokens) and self._match(TokenType.PLUS, TokenType.MINUS):
+            op = self.tokens[self.pos-1].type
+            right = self.parse_factor(stop_tokens)
+            expr = BinaryOp(expr, op, right)
+        return expr
 
+    def parse_factor(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        expr = self.parse_unary(stop_tokens)
+        while self._check_not_stop(TokenType.STAR, TokenType.SLASH, TokenType.PERCENT, stop_tokens=stop_tokens) and self._match(TokenType.STAR, TokenType.SLASH, TokenType.PERCENT):
+            op = self.tokens[self.pos-1].type
+            right = self.parse_unary(stop_tokens)
+            expr = BinaryOp(expr, op, right)
+        return expr
 
-def _translate_expression(expr: str) -> str:
-    expr = expr.strip()
-    expr = expr.replace("\\True\\", "True").replace("\\False\\", "False")
+    def parse_unary(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        if self._match(TokenType.MINUS, TokenType.TILDE):
+            op = self.tokens[self.pos-1].type
+            expr = self.parse_unary(stop_tokens)
+            return UnaryOp(op, expr)
+        return self.parse_primary(stop_tokens)
 
-    def replace_random(match: re.Match[str]) -> str:
-        module_name = match.group(1)
-        if module_name.lower() != "random":
-            return match.group(0)
-        args = [arg.strip() for arg in _split_args(match.group(2)) if arg.strip()]
-        if len(args) >= 2:
-            return f"random.randint({_translate_expression(args[0])}, {_translate_expression(args[1])})"
-        if len(args) == 1:
-            return f"random.randint(0, {_translate_expression(args[0])})"
-        return "random.randint(0, 1)"
+    def _check_not_stop(self, *types: TokenType, stop_tokens: Optional[List[TokenType]] = None) -> bool:
+        if not self._check_any(*types):
+            return False
+        if stop_tokens and self._peek().type in stop_tokens:
+            return False
+        return True
 
-    expr = re.sub(r"<\$([A-Za-z_][A-Za-z0-9_]*)>\(([^()]*)\)", replace_random, expr)
-    expr = re.sub(r"<\$([A-Za-z_][A-Za-z0-9_]*)>\^\(([^()]*)\)", replace_random, expr)
-    expr = _translate_index_access(expr)
-    return expr
+    def _check_any(self, *types: TokenType) -> bool:
+        for t in types:
+            if self._check(t):
+                return True
+        return False
 
-
-def _translate_format_string(expr: str) -> str:
-    return _translate_index_access(expr)
-
-
-def compile_ko_source(source: str, file_name: str = "<stdin>", enforce_main: bool = False) -> str:
-    lines = source.replace("\r\n", "\n").split("\n")
-    output: List[str] = []
-    indent_level = 0
-    pending_indent = 0
-    block_stack: List[str] = []
-    class_attrs_stack: List[List[str]] = []
-    main_defined = False
-    pending_loop_condition: Optional[str] = None
-    module_aliases = {
-        "random": "random",
-        "Random": "random",
-        "math": "math",
-        "Math": "math",
-        "sys": "sys",
-        "Sys": "sys",
-        "os": "os",
-        "Os": "os",
-        "json": "json",
-        "Json": "json",
-        "re": "re",
-        "Re": "re",
-        "datetime": "datetime",
-        "Datetime": "datetime",
-    }
-
-    def flush_line(line: str) -> None:
-        nonlocal indent_level, pending_indent
-        output.append(" " * indent_level + line)
-
-    def is_executable_scope() -> bool:
-        return any(scope in ("main", "function", "method") for scope in block_stack)
-
-    def parse_params(raw_params: str) -> List[str]:
-        params: List[str] = []
-        for part in raw_params.split(","):
-            fragment = part.strip()
-            if not fragment:
-                continue
-            match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\*([A-Za-z_][A-Za-z0-9_]*)$", fragment)
-            if match:
-                params.append(match.group(2))
+    def parse_primary(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        expr = self._parse_base_primary(stop_tokens)
+        
+        # Handle suffixes: indexing <index> and method calls $instance~method()
+        while True:
+            next_token = self._peek()
+            if next_token.type == TokenType.LANGLE and next_token.line == self.tokens[self.pos-1].line and next_token.column == self.tokens[self.pos-1].column + len(str(self.tokens[self.pos-1].value)):
+                # target<index> with no space
+                self._advance()
+                indices = []
+                while True:
+                    # Index expressions should stop at > or another <
+                    indices.append(self.parse_expression(stop_tokens=[TokenType.RANGLE, TokenType.LANGLE]))
+                    if not self._match(TokenType.LANGLE):
+                        break
+                self._consume(TokenType.RANGLE, "Expected >")
+                expr = Indexing(expr, indices)
+            elif self._match(TokenType.DOLLAR):
+                # $instance~method(args)
+                method_name = self._consume(TokenType.ID, "Expected method name").value
+                self._consume(TokenType.TILDE, "Expected ~")
+                self._consume(TokenType.LPAREN, "Expected (")
+                args = []
+                if not self._check(TokenType.RPAREN):
+                    while True:
+                        args.append(self.parse_expression(stop_tokens=[TokenType.RPAREN]))
+                        if not self._match(TokenType.COMMA):
+                            break
+                self._consume(TokenType.RPAREN, "Expected )")
+                expr = Call(method_name, args, is_instance_method=True, instance=expr.name if isinstance(expr, Identifier) else None)
             else:
-                params.append(fragment)
-        return params
+                break
+        return expr
 
-    current_function_params_stack: List[List[str]] = []
-    current_function_globals_stack: List[List[str]] = []
+    def _parse_base_primary(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        if self._match(TokenType.INT, TokenType.FREAL, TokenType.STRING, TokenType.BOOL):
+            return Literal(self.tokens[self.pos-1].value)
+        
+        if self._match(TokenType.ID):
+            return Identifier(self.tokens[self.pos-1].value)
+        
+        if self._check(TokenType.LANGLE):
+            return self.parse_system_tag_or_index(stop_tokens)
 
-    def current_params() -> List[str]:
-        return current_function_params_stack[-1] if current_function_params_stack else []
+        if self._match(TokenType.LPAREN):
+            elements = []
+            if not self._check(TokenType.RPAREN):
+                while True:
+                    elements.append(self.parse_expression(stop_tokens=[TokenType.RPAREN]))
+                    if not self._match(TokenType.COMMA):
+                        break
+            self._consume(TokenType.RPAREN, "Expected )")
+            if len(elements) == 1:
+                if self._check(TokenType.LBRACE):
+                    key = elements[0]
+                    self._consume(TokenType.LBRACE, "Expected {")
+                    value = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+                    self._consume(TokenType.RBRACE, "Expected }")
+                    return DictLiteral({key: value})
+                if self._peek().type == TokenType.TILDE:
+                    return TupleLiteral(elements)
+                return elements[0]
+            return TupleLiteral(elements)
 
-    def current_globals() -> List[str]:
-        return current_function_globals_stack[-1] if current_function_globals_stack else []
+        self._error(f"Expected expression, found {self._peek().type}")
 
-    def add_function_global(name: str) -> None:
-        if not current_function_globals_stack:
-            return
-        globals_list = current_function_globals_stack[-1]
-        if name not in globals_list:
-            globals_list.append(name)
-            flush_line(f"global {name}")
+    def parse_call_or_instantiation(self) -> Stmt:
+        # ~tên_hàm(args) or ~TênClass~tên_instance or $instance*method(args)
+        if self._match(TokenType.TILDE, TokenType.STAR):
+            name = self._consume(TokenType.ID, "Expected name").value
+            if self._match(TokenType.LPAREN):
+                # Call
+                args = self.parse_call_args()
+                return Call(name, args)
+            elif self._match(TokenType.TILDE, TokenType.STAR):
+                # Instantiation
+                instance_name = self._consume(TokenType.ID, "Expected instance name").value
+                return VarDecl(name, None, instance_name)
+        elif self._match(TokenType.DOLLAR):
+            # $instance*method
+            instance = self._consume(TokenType.ID, "Expected instance").value
+            self._match(TokenType.TILDE, TokenType.STAR) # Consume sigil
+            method_name = self._consume(TokenType.ID, "Expected method name").value
+            self._consume(TokenType.LPAREN, "Expected (")
+            args = self.parse_call_args()
+            self._consume(TokenType.RPAREN, "Expected )")
+            return Call(method_name, args, is_instance_method=True, instance=instance)
+        
+        self._error("Invalid call or instantiation")
 
-    def open_block(header: str, scope: str = "block") -> None:
-        nonlocal indent_level, pending_indent
-        flush_line(header)
-        block_stack.append(scope)
-        indent_level += 4
-        pending_indent = indent_level
+    def parse_call_args(self) -> List[Expr]:
+        args = []
+        if not self._check(TokenType.RPAREN):
+            while True:
+                args.append(self.parse_expression(stop_tokens=[TokenType.RPAREN, TokenType.COMMA]))
+                if not self._match(TokenType.COMMA):
+                    break
+        self._consume(TokenType.RPAREN, "Expected )")
+        return args
 
-    def parse_loop_header(loop_expr: str) -> List[str]:
-        expression = _translate_expression(loop_expr.strip())
-        assignment_match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)", expression)
-        if assignment_match:
-            name, value = assignment_match.groups()
-            return [f"{name} = {value}", "while True:"]
+    def parse_memory(self) -> Stmt:
+        self._consume(TokenType.MEMORY, "Expected <memory>")
+        # Could be <memory>^h or <memory>dete(h)
+        if self._match(TokenType.CARET):
+            target = self._consume(TokenType.ID, "Expected identifier").value
+            return Call("memory_addr", [Identifier(target)])
+        elif self._match(TokenType.ID):
+            func = self.tokens[self.pos-1].value
+            if func == "dete":
+                self._consume(TokenType.LPAREN, "Expected (")
+                target = self._consume(TokenType.ID, "Expected identifier").value
+                self._consume(TokenType.RPAREN, "Expected )")
+                return Call("memory_free", [Identifier(target)])
+        
+        self._error("Invalid memory operation")
 
-        step_match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)\s*([+-])\s*(.+)", expression)
-        if step_match:
-            name, operator, value = step_match.groups()
-            return [f"{name} = globals().get('{name}', 0)", "while True:", f"{name} = {name} {operator} ({value})"]
+    def parse_print(self) -> Stmt:
+        is_printf = self._peek().type == TokenType.PRINTF
+        self._advance() # Consume <print> or <printf>
+        
+        if not is_printf:
+            self._consume(TokenType.ID, "Expected type (string)")
+            
+        self._consume(TokenType.CARET, "Expected ^")
+        self._consume(TokenType.LPAREN, "Expected (")
+        
+        # Collect everything until the closing )
+        content = ""
+        while not self._check(TokenType.RPAREN):
+            token = self._advance()
+            if token.value:
+                content += str(token.value)
+            
+        self._consume(TokenType.RPAREN, "Expected )")
+        return Call("printf" if is_printf else "print", [Literal(content)])
 
-        return ["while True:"]
-
-    for lineno, raw_line in enumerate(lines, start=1):
-        line = raw_line.strip()
-        if not line:
-            output.append("")
-            continue
-        if line == "[":
-            if not block_stack:
-                block_stack.append("main")
+    def parse_input(self) -> Stmt:
+        self._consume(TokenType.INPUT, "Expected <input>")
+        self._consume(TokenType.LPAREN, "Expected (")
+        prompt = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        
+        if self._match(TokenType.ASSIGN_INPUT):
+            # <input>(...)&=string("")~name
+            # or <input>(...)&=name
+            if self._check(TokenType.ID) and self._peek(1).type == TokenType.LPAREN:
+                # New var decl
+                decl = self.parse_var_decl()
+                return Assignment(Identifier(decl.name), Call("input", [prompt]))
             else:
-                block_stack.append("anon")
-            continue
-        if line.startswith("|") and line.endswith("|"):
-            continue
-        if line == "]":
-            if block_stack:
-                popped = block_stack.pop()
-                if popped == "class" and class_attrs_stack:
-                    class_attrs_stack.pop()
-                if popped in ("function", "method"):
-                    if current_function_params_stack:
-                        current_function_params_stack.pop()
-                    if current_function_globals_stack:
-                        current_function_globals_stack.pop()
-            if indent_level >= 4:
-                indent_level -= 4
-            continue
-        if re.match(r"^@private\s*\[$", line):
-            flush_line("pass")
-            continue
-        if re.match(r"^if\s*\((.*)\)\s*\[$", line):
-            condition = re.match(r"^if\s*\((.*)\)\s*\[$", line).group(1)
-            open_block(f"if {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^elif\s*\((.*)\)\s*\[$", line):
-            condition = re.match(r"^elif\s*\((.*)\)\s*\[$", line).group(1)
-            open_block(f"elif {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^else\s*\[$", line):
-            open_block("else:")
-            continue
-        if re.match(r"^<if>\((.*)\)\s*\[$", line):
-            condition = re.match(r"^<if>\((.*)\)\s*\[$", line).group(1)
-            open_block(f"if {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^<elif>\((.*)\)\s*\[$", line):
-            condition = re.match(r"^<elif>\((.*)\)\s*\[$", line).group(1)
-            open_block(f"elif {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^<else>\s*\[$", line):
-            open_block("else:")
-            continue
-        if re.match(r"^<if<else>>\((.*)\)\s*\[$", line):
-            condition = re.match(r"^<if<else>>\((.*)\)\s*\[$", line).group(1)
-            open_block(f"if {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*!class\s*\[$", line):
-            class_name = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*!class\s*\[$", line).group(1)
-            flush_line(f"class {class_name}:")
-            indent_level += 4
-            pending_indent = indent_level
-            block_stack.append("class")
-            class_attrs_stack.append([])
-            continue
-        if re.match(r"^@loop\((.*)\)$", line, re.IGNORECASE):
-            pending_loop_condition = re.match(r"^@loop\((.*)\)$", line, re.IGNORECASE).group(1)
-            continue
-        if re.match(r"^\*\*Loop\*\*\s*<for\.f\.whle>@also\s*\[$", line, re.IGNORECASE):
-            condition = pending_loop_condition or "True"
-            pending_loop_condition = None
-            open_block(f"while {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^\*\*Loop\*\*\s*<for>\(\*(.+)\)\s*\[$", line, re.IGNORECASE):
-            loop_expr = re.match(r"^\*\*Loop\*\*\s*<for>\(\*(.+)\)\s*\[$", line, re.IGNORECASE).group(1)
-            loop_lines = parse_loop_header(loop_expr)
-            body_lines = []
-            if "while True:" in loop_lines:
-                header_index = loop_lines.index("while True:")
-                for loop_line in loop_lines[:header_index]:
-                    flush_line(loop_line)
-                flush_line("while True:")
-                body_lines = loop_lines[header_index + 1:]
-            else:
-                flush_line(loop_lines[-1])
-            block_stack.append("block")
-            indent_level += 4
-            for loop_line in body_lines:
-                flush_line(loop_line)
-            pending_indent = indent_level
-            continue
-        if re.match(r"^loop\s*\((.*)\)\s*\[$", line, re.IGNORECASE):
-            condition = re.match(r"^loop\s*\((.*)\)\s*\[$", line, re.IGNORECASE).group(1)
-            open_block(f"while {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^while\s*\((.*)\)\s*\[$", line, re.IGNORECASE):
-            condition = re.match(r"^while\s*\((.*)\)\s*\[$", line, re.IGNORECASE).group(1)
-            open_block(f"while {_translate_expression(condition)}:")
-            continue
-        if re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*\[$", line):
-            match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)\s*\[$", line)
-            fn_name = match.group(1)
-            raw_params = match.group(2)
-            params = parse_params(raw_params)
-            current_function_params_stack.append(params)
-            current_function_globals_stack.append([])
-            in_class = any(scope == "class" for scope in block_stack)
-            if in_class:
-                signature = ["self", *params]
-                flush_line(f"def {fn_name}({', '.join(signature)}):")
-                block_stack.append("method")
-            else:
-                if fn_name == "main":
-                    main_defined = True
-                flush_line(f"def {fn_name}({', '.join(params)}):" if params else f"def {fn_name}():")
-                block_stack.append("function")
-            indent_level += 4
-            if in_class and class_attrs_stack:
-                for attr in class_attrs_stack[-1]:
-                    flush_line(f"{attr} = self.{attr}")
-            pending_indent = indent_level
-            continue
-        if re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\[$", line):
-            fn_name = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\[$", line).group(1)
-            current_function_params_stack.append([])
-            current_function_globals_stack.append([])
-            in_class = any(scope == "class" for scope in block_stack)
-            if in_class:
-                flush_line(f"def {fn_name}(self):")
-                block_stack.append("method")
-            else:
-                if fn_name == "main":
-                    main_defined = True
-                flush_line(f"def {fn_name}():")
-                block_stack.append("function")
-            indent_level += 4
-            if in_class and class_attrs_stack:
-                for attr in class_attrs_stack[-1]:
-                    flush_line(f"{attr} = self.{attr}")
-            pending_indent = indent_level
-            continue
-        if re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\[$", line):
-            name = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\[$", line).group(1)
-            current_function_params_stack.append([])
-            current_function_globals_stack.append([])
-            in_class = any(scope == "class" for scope in block_stack)
-            if in_class:
-                flush_line(f"def {name}(self):")
-                block_stack.append("method")
-            else:
-                if name == "main":
-                    main_defined = True
-                flush_line(f"def {name}():")
-                block_stack.append("function")
-            indent_level += 4
-            if in_class and class_attrs_stack:
-                for attr in class_attrs_stack[-1]:
-                    flush_line(f"{attr} = self.{attr}")
-            pending_indent = indent_level
-            continue
-        if re.match(r"^\*([A-Za-z_][A-Za-z0-9_]*)\*([A-Za-z_][A-Za-z0-9_]*)\s*$", line):
-            class_name, var_name = re.match(r"^\*([A-Za-z_][A-Za-z0-9_]*)\*([A-Za-z_][A-Za-z0-9_]*)\s*$", line).groups()
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            flush_line(f"{var_name} = {class_name}()")
-            continue
-        if re.match(r"^\*\*Import\*\*\(\$([A-Za-z_][A-Za-z0-9_]*)\)@also%\*([A-Za-z_][A-Za-z0-9_]*)(!`[^`]+`)?:(.+)$", line):
-            match = re.match(r"^\*\*Import\*\*\(\$([A-Za-z_][A-Za-z0-9_]*)\)@also%\*([A-Za-z_][A-Za-z0-9_]*)(!`[^`]+`)?:(.+)$", line)
-            module_name = match.group(1)
-            alias = match.group(2)
-            python_module = module_aliases.get(module_name, module_name.lower())
-            flush_line(f"import {python_module} as {alias}")
-            continue
-        if re.match(r"^\*\*Import\*\*\(\$([A-Za-z_][A-Za-z0-9_]*)\)\s*\[$", line):
-            module_name = re.match(r"^\*\*Import\*\*\(\$([A-Za-z_][A-Za-z0-9_]*)\)\s*\[$", line).group(1)
-            python_module = module_aliases.get(module_name, module_name.lower())
-            flush_line(f"import {python_module}")
-            continue
-        if re.match(r"^<([A-Za-z_][A-Za-z0-9_]*)>\^\((.*)\)\*([A-Za-z_][A-Za-z0-9_]*)$", line):
-            module_name, args, target = re.match(r"^<([A-Za-z_][A-Za-z0-9_]*)>\^\((.*)\)\*([A-Za-z_][A-Za-z0-9_]*)$", line).groups()
-            if module_name.lower() == "random":
-                translated = _translate_expression(f"<$random>^({args})")
-                flush_line(f"{target} = {translated}")
-                continue
-        if re.match(r"^\*([A-Za-z_][A-Za-z0-9_]*)\((.*)\)\s*$", line):
-            fn_name = re.match(r"^\*([A-Za-z_][A-Za-z0-9_]*)\((.*)\)\s*$", line).group(1)
-            args = re.match(r"^\*([A-Za-z_][A-Za-z0-9_]*)\((.*)\)\s*$", line).group(2)
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            flush_line(f"{fn_name}({args})")
-            continue
-        if re.match(r"^\*([A-Za-z_][A-Za-z0-9_]*)\(\)\s*$", line):
-            fn_name = re.match(r"^\*([A-Za-z_][A-Za-z0-9_]*)\(\)\s*$", line).group(1)
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            flush_line(f"{fn_name}()")
-            continue
-        if re.match(r"^\$([A-Za-z_][A-Za-z0-9_]*)\*([A-Za-z_][A-Za-z0-9_]*)\s*$", line):
-            obj, method = re.match(r"^\$([A-Za-z_][A-Za-z0-9_]*)\*([A-Za-z_][A-Za-z0-9_]*)\s*$", line).groups()
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            flush_line(f"{obj}.{method}()")
-            continue
-        if re.match(r"^\$([A-Za-z_][A-Za-z0-9_]*)\*([A-Za-z_][A-Za-z0-9_]*)\((.*)\)\s*$", line):
-            obj, method, args = re.match(r"^\$([A-Za-z_][A-Za-z0-9_]*)\*([A-Za-z_][A-Za-z0-9_]*)\((.*)\)\s*$", line).groups()
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            flush_line(f"{obj}.{method}({args})")
-            continue
-        if re.match(r"^(int|freal|string|booling|byte)\((.*)\)\*([A-Za-z_][A-Za-z0-9_]*)$", line):
-            type_name, initializer, var_name = re.match(r"^(int|freal|string|booling|byte)\((.*)\)\*([A-Za-z_][A-Za-z0-9_]*)$", line).groups()
-            py_type = {"int": "int", "freal": "float", "string": "str", "booling": "bool", "byte": "bytes"}.get(type_name, type_name)
-            initializer = _translate_expression(initializer)
-            if class_attrs_stack and any(scope == "class" for scope in block_stack) and not any(scope in ("function", "method") for scope in block_stack):
-                class_attrs_stack[-1].append(var_name)
-            if type_name == "byte":
-                flush_line(f"{var_name} = bytes({initializer}, 'utf-8') if isinstance({initializer}, str) else bytes({initializer})")
-            else:
-                flush_line(f"{var_name} = {py_type}({initializer})")
-            continue
-        if re.match(r"^\((.*)\)\*([A-Za-z_][A-Za-z0-9_]*)$", line):
-            initializer, var_name = re.match(r"^\((.*)\)\*([A-Za-z_][A-Za-z0-9_]*)$", line).groups()
-            if class_attrs_stack and any(scope == "class" for scope in block_stack) and not any(scope in ("function", "method") for scope in block_stack):
-                class_attrs_stack[-1].append(var_name)
-            flush_line(f"{var_name} = {_translate_data_literal('(' + initializer + ')')}")
-            continue
-        if re.match(r"^<print>.+\^\((.*)\)$", line):
-            expr = re.match(r"^<print>.+\^\((.*)\)$", line).group(1)
-            expr = _translate_expression(expr)
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            flush_line(f"print({expr})")
-            continue
-        if re.match(r"^<printf>\^\((.*)\)$", line):
-            expr = re.match(r"^<printf>\^\((.*)\)$", line).group(1)
-            expr = _translate_expression(expr)
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            if "{" in expr and "}" in expr:
-                expr = _translate_format_string(expr)
-                flush_line(f"print(f{expr})")
-            else:
-                flush_line(f"print({expr})")
-            continue
-        if re.match(r"^<input>\((.*)\)&=(?:(?:string)\(.*\)\*)?([A-Za-z_][A-Za-z0-9_]*)$", line):
-            prompt, target = re.match(r"^<input>\((.*)\)&=(?:(?:string)\(.*\)\*)?([A-Za-z_][A-Za-z0-9_]*)$", line).groups()
-            prompt = _translate_expression(prompt)
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            flush_line(f"{target} = input({prompt})")
-            if "method" in block_stack and class_attrs_stack and target in class_attrs_stack[-1]:
-                flush_line(f"self.{target} = {target}")
-            continue
-        if re.match(r"^<input>\((.*)\)$", line):
-            target_or_prompt = _translate_expression(re.match(r"^<input>\((.*)\)$", line).group(1))
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", target_or_prompt):
-                flush_line(f"{target_or_prompt} = input()")
-            else:
-                flush_line(f"input({target_or_prompt})")
-            continue
-        if re.match(r"^<memory>\^([A-Za-z_][A-Za-z0-9_]*)$", line):
-            name = re.match(r"^<memory>\^([A-Za-z_][A-Za-z0-9_]*)$", line).group(1)
-            flush_line(f"memoryview(bytes(str({name}), 'utf-8'))")
-            continue
-        if re.match(r"^<now>\((.*)\)>([A-Za-z_][A-Za-z0-9_]*)$", line):
-            expr, target = re.match(r"^<now>\((.*)\)>([A-Za-z_][A-Za-z0-9_]*)$", line).groups()
-            expr = _translate_expression(expr)
-            if enforce_main and not is_executable_scope():
-                raise KoCompileError("Executable statements must be inside main or a function", line=lineno)
-            if current_function_params_stack and target not in current_params():
-                add_function_global(target)
-            flush_line(f"{target} = {expr}")
-            if "method" in block_stack and class_attrs_stack and target in class_attrs_stack[-1]:
-                flush_line(f"self.{target} = {target}")
-            continue
-        flush_line(line)
-    if enforce_main and not main_defined:
-        if "main" not in block_stack and not any(line.strip() == "[" for line in lines):
-            raise KoCompileError("A .ko program must define a main block [ ]", line=0, column=0)
-    if main_defined and enforce_main:
-        output.append("\nmain()")
-    return "\n".join(output)
+                target = self._consume(TokenType.ID, "Expected target variable").value
+                return Assignment(Identifier(target), Call("input", [prompt]))
+        
+        return Call("input", [prompt])
+
+    def parse_return(self) -> Stmt:
+        self._consume(TokenType.RETURN, "Expected <return>")
+        self._consume(TokenType.LPAREN, "Expected (")
+        expr = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        return Call("return", [expr])
+
+    def parse_system_tag_or_index(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        # We know next is LANGLE
+        self._advance()
+        if self._match(TokenType.DOLLAR):
+            # <$random>(...) or <$web>domain(...)
+            module_name = self._consume(TokenType.ID, "Expected module name").value
+            self._consume(TokenType.RANGLE, "Expected >")
+            
+            func_name = None
+            if self._check(TokenType.ID):
+                func_name = self._advance().value
+            
+            self._match(TokenType.CARET) # Consume ^ if present
+            
+            args = []
+            if self._match(TokenType.LPAREN):
+                if not self._check(TokenType.RPAREN):
+                    while True:
+                        args.append(self.parse_expression(stop_tokens=[TokenType.RPAREN, TokenType.COMMA]))
+                        if not self._match(TokenType.COMMA):
+                            break
+                self._consume(TokenType.RPAREN, "Expected )")
+            
+            full_name = f"{module_name}.{func_name}" if func_name else module_name
+            target = None
+            if self._check(TokenType.ID) and self._peek().value.startswith("@"):
+                target = self._advance().value[1:]
+            
+            return Call(full_name, args, target=target)
+        
+        self._error("Unexpected '<' in expression (expected module call <$module>)")
 
 
-def compile_ko_file(path: str) -> str:
+class KoCodeGenerator:
+    def __init__(self, program: Program):
+        self.program = program
+        self.output = []
+        self.indent_level = 0
+        self.scope_stack = ["global"]
+
+    def _indent(self):
+        return "    " * self.indent_level
+
+    def _write(self, line: str):
+        self.output.append(self._indent() + line)
+
+    def generate(self) -> str:
+        # 1. Imports
+        for imp in self.program.imports:
+            self._write(f"# Import handled by Import.java simulation")
+            self._write(f"import {imp.module_name.lower()} as {imp.alias}")
+
+        # 2. Classes and Functions
+        for decl in self.program.decls:
+            self.visit(decl)
+
+        # 3. Main Block with Upward Catching
+        if self.program.main:
+            self.visit(self.program.main)
+
+        # 4. Global Catch Blocks (Sequential Upward)
+        # In .ko, catch blocks at the end protect EVERYTHING before them in the same scope.
+        # This requires wrapping the generated code in try/except.
+        if self.program.catch_blocks:
+            final_code = "\n".join(self.output)
+            self.output = []
+            self._write("try:")
+            self.indent_level += 1
+            for line in final_code.split("\n"):
+                self.output.append(self._indent() + line.lstrip())
+            self.indent_level -= 1
+            
+            for catch in self.program.catch_blocks:
+                self.visit(catch)
+
+        return "\n".join(self.output)
+
+    def visit(self, node: Node):
+        method_name = f"visit_{node.__class__.__name__}"
+        visitor = getattr(self, method_name, self.generic_visit)
+        return visitor(node)
+
+    def generic_visit(self, node: Node):
+        raise NotImplementedError(f"No visit_{node.__class__.__name__} method")
+
+    def visit_ClassDecl(self, node: ClassDecl):
+        self._write(f"class {node.name}:")
+        self.indent_level += 1
+        self.scope_stack.append("class")
+        
+        # Merge public and private
+        all_stmts = node.body + node.private_body
+        if not all_stmts:
+            self._write("pass")
+        else:
+            for stmt in all_stmts:
+                self.visit(stmt)
+        
+        self.scope_stack.pop()
+        self.indent_level -= 1
+
+    def visit_FuncDecl(self, node: FuncDecl):
+        params = [p.name for p in node.params]
+        if self.scope_stack[-1] == "class":
+            params = ["self"] + params
+        
+        param_str = ", ".join(params)
+        self._write(f"def {node.name}({param_str}):")
+        self.indent_level += 1
+        self.scope_stack.append("func")
+        
+        if not node.body:
+            self._write("pass")
+        else:
+            for stmt in node.body:
+                self.visit(stmt)
+        
+        self.scope_stack.pop()
+        self.indent_level -= 1
+
+    def visit_MainBlock(self, node: MainBlock):
+        self._write("def main():")
+        self.indent_level += 1
+        self.scope_stack.append("main")
+        
+        if not node.body:
+            self._write("pass")
+        else:
+            for stmt in node.body:
+                self.visit(stmt)
+        
+        self.scope_stack.pop()
+        self.indent_level -= 1
+        self._write("\nif __name__ == '__main__':")
+        self._write("    main()")
+
+    def visit_VarDecl(self, node: VarDecl):
+        val = self.visit(node.initializer) if node.initializer else "None"
+        self._write(f"{node.name} = {val}")
+
+    def visit_Assignment(self, node: Assignment):
+        val = self.visit(node.value)
+        self._write(f"{node.target.name} = {val}")
+
+    def visit_NowMutation(self, node: NowMutation):
+        val = self.visit(node.expr)
+        self._write(f"{node.target.name} = {val}")
+
+    def visit_IfStmt(self, node: IfStmt):
+        cond = self.visit(node.condition)
+        self._write(f"if {cond}:")
+        self.indent_level += 1
+        for stmt in node.body:
+            self.visit(stmt)
+        self.indent_level -= 1
+        
+        if node.else_body:
+            if isinstance(node.else_body, IfStmt):
+                self._visit_elif(node.else_body)
+            else:
+                self._write("else:")
+                self.indent_level += 1
+                for stmt in node.else_body:
+                    self.visit(stmt)
+                self.indent_level -= 1
+
+    def _visit_elif(self, node: IfStmt):
+        cond = self.visit(node.condition)
+        self._write(f"elif {cond}:")
+        self.indent_level += 1
+        for stmt in node.body:
+            self.visit(stmt)
+        self.indent_level -= 1
+        
+        if node.else_body:
+            if isinstance(node.else_body, IfStmt):
+                self._visit_elif(node.else_body)
+            else:
+                self._write("else:")
+                self.indent_level += 1
+                for stmt in node.else_body:
+                    self.visit(stmt)
+                self.indent_level -= 1
+
+    def visit_ForLoop(self, node: ForLoop):
+        self._write(f"# Optimized by Loop.cpp simulation")
+        start = self.visit(node.start)
+        end = self.visit(node.end)
+        step = self.visit(node.step) if node.step else "1"
+        self._write(f"for {node.var_name} in range({start}, {end} + 1, {step}):")
+        self.indent_level += 1
+        for stmt in node.body:
+            self.visit(stmt)
+        self.indent_level -= 1
+
+    def visit_WhileLoop(self, node: WhileLoop):
+        cond = self.visit(node.condition)
+        self._write(f"while {cond}:")
+        self.indent_level += 1
+        for stmt in node.body:
+            self.visit(stmt)
+        self.indent_level -= 1
+
+    def visit_CatchStmt(self, node: CatchStmt):
+        if isinstance(node.error_condition, str):
+            # Error code
+            self._write(f"except Exception as e if getattr(e, 'type', None) == '{node.error_condition}' else False:")
+        else:
+            # Condition
+            cond = self.visit(node.error_condition)
+            self._write(f"except Exception as e:")
+            self.indent_level += 1
+            self._write(f"if not ({cond}): raise e")
+        
+        self.indent_level += 1
+        # error dictionary
+        self._write("error = {'line': sys.exc_info()[2].tb_lineno, 'code': '', 'type': type(e).__name__}")
+        for stmt in node.body:
+            self.visit(stmt)
+        self.indent_level -= 1
+
+    def visit_Literal(self, node: Literal):
+        if isinstance(node.value, str):
+            return f'"{node.value}"'
+        return str(node.value)
+
+    def visit_Identifier(self, node: Identifier):
+        return node.name
+
+    def visit_BinaryOp(self, node: BinaryOp):
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        op_map = {
+            TokenType.PLUS: "+", TokenType.MINUS: "-", TokenType.STAR: "*",
+            TokenType.SLASH: "/", TokenType.PERCENT: "%",
+            TokenType.AND: "and", TokenType.OR: "or",
+            TokenType.EQ: "==", TokenType.NE: "!=",
+            TokenType.GT: ">", TokenType.GE: ">=", TokenType.LE: "<=",
+            TokenType.LANGLE: "<"
+        }
+        return f"({left} {op_map[node.op]} {right})"
+
+    def visit_UnaryOp(self, node: UnaryOp):
+        expr = self.visit(node.expr)
+        op = "-" if node.op == TokenType.MINUS else "not"
+        return f"{op}({expr})"
+
+    def visit_Indexing(self, node: Indexing):
+        target = self.visit(node.target)
+        indices = "".join(f"[{self.visit(idx)}]" for idx in node.index)
+        return f"{target}{indices}"
+
+    def visit_Call(self, node: Call):
+        args_list = [self.visit(arg) for arg in node.args]
+        args = ", ".join(args_list)
+        if node.name == "printf":
+            # Combine args into a single f-string if they are fragments
+            parts = []
+            for arg in node.args:
+                if isinstance(arg, Literal) and isinstance(arg.value, str):
+                    parts.append(arg.value)
+                else:
+                    parts.append(f"{{{self.visit(arg)}}}")
+            call_code = f'print(f"{"".join(parts)}")'
+        elif node.name == "print":
+            call_code = f"print({args})"
+        elif node.name == "input":
+            call_code = f"input({args})"
+        elif node.name == "random":
+            call_code = f"random.randint({args})"
+        elif node.name == "return":
+            self._write(f"return {args}")
+            return ""
+        elif node.is_instance_method:
+            instance = node.instance or "self"
+            call_code = f"{instance}.{node.name}({args})"
+        else:
+            call_code = f"{node.name}({args})"
+            
+        if node.target:
+            self._write(f"{node.target} = {call_code}")
+            return node.target
+        
+        return call_code
+
+    def visit_TupleLiteral(self, node: TupleLiteral):
+        elements = ", ".join(self.visit(e) for e in node.elements)
+        return f"({elements})"
+
+    def visit_DictLiteral(self, node: DictLiteral):
+        mapping = ", ".join(f"{self.visit(k)}: {self.visit(v)}" for k, v in node.mapping.items())
+        return f"{{{mapping}}}"
+
+
+class KoInterpreter:
+    def __init__(self, program: Program):
+        self.program = program
+        self.scopes = [{}]
+        self.functions = {}
+        self.classes = {}
+
+    def push_scope(self):
+        self.scopes.append({})
+    
+    def pop_scope(self):
+        self.scopes.pop()
+    
+    def get_var(self, name):
+        for scope in reversed(self.scopes):
+            if name in scope:
+                return scope[name]
+        raise NameError(f"Name '{name}' is not defined")
+    
+    def set_var(self, name, value):
+        self.scopes[-1][name] = value
+
+    def run(self):
+        for decl in self.program.decls:
+            if isinstance(decl, FuncDecl):
+                self.functions[decl.name] = decl
+            elif isinstance(decl, ClassDecl):
+                self.classes[decl.name] = decl
+        
+        if self.program.main:
+            self.visit(self.program.main)
+    
+    def visit(self, node: Node):
+        method_name = f"visit_{node.__class__.__name__}"
+        visitor = getattr(self, method_name, self.generic_visit)
+        return visitor(node)
+        
+    def generic_visit(self, node: Node):
+        raise NotImplementedError(f"No visit_{node.__class__.__name__} method")
+
+    def visit_IfStmt(self, node: IfStmt):
+        if self.visit(node.condition):
+            for stmt in node.body:
+                self.visit(stmt)
+        elif node.else_body:
+            if isinstance(node.else_body, IfStmt):
+                self.visit(node.else_body)
+            else:
+                for stmt in node.else_body:
+                    self.visit(stmt)
+
+    def visit_ForLoop(self, node: ForLoop):
+        start = self.visit(node.start)
+        end = self.visit(node.end)
+        step = self.visit(node.step) if node.step else 1
+        
+        for i in range(start, end + 1, step):
+            self.set_var(node.var_name, i)
+            for stmt in node.body:
+                self.visit(stmt)
+
+    def visit_Call(self, node: Call):
+        args = [self.visit(arg) for arg in node.args]
+        
+        if node.name == "print":
+            print(*args)
+        elif node.name == "printf":
+            # Simplified printf
+            print(args[0])
+        elif node.name == "input":
+            return input(args[0] if args else "")
+        elif node.name == "return":
+            # Handle return by raising a custom exception
+            raise ReturnException(args[0] if args else None)
+        else:
+            # Custom function call
+            if node.name in self.functions:
+                func = self.functions[node.name]
+                self.push_scope()
+                # bind args
+                for i, param in enumerate(func.params):
+                    self.set_var(param.name, args[i])
+                
+                try:
+                    for stmt in func.body:
+                        self.visit(stmt)
+                except ReturnException as e:
+                    self.pop_scope()
+                    return e.value
+                self.pop_scope()
+                return None
+            else:
+                raise NameError(f"Function {node.name} not defined")
+
+class ReturnException(Exception):
+    def __init__(self, value):
+        self.value = value
+        val = self.visit(node.initializer) if node.initializer else None
+        self.set_var(node.name, val)
+        
+    def visit_Assignment(self, node: Assignment):
+        val = self.visit(node.value)
+        for scope in reversed(self.scopes):
+            if node.target.name in scope:
+                scope[node.target.name] = val
+                return
+        self.set_var(node.target.name, val)
+
+    def visit_Identifier(self, node: Identifier):
+        return self.get_var(node.name)
+        
+    def visit_Literal(self, node: Literal):
+        return node.value
+
+    def visit_BinaryOp(self, node: BinaryOp):
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        
+        if node.op == TokenType.PLUS: return left + right
+        if node.op == TokenType.MINUS: return left - right
+        if node.op == TokenType.STAR: return left * right
+        if node.op == TokenType.SLASH: return left / right
+        if node.op == TokenType.PERCENT: return left % right
+        if node.op == TokenType.AND: return left and right
+        if node.op == TokenType.OR: return left or right
+        if node.op == TokenType.EQ: return left == right
+        if node.op == TokenType.NE: return left != right
+        if node.op == TokenType.GT: return left > right
+        if node.op == TokenType.GE: return left >= right
+        if node.op == TokenType.LE: return left <= right
+        raise NotImplementedError(f"Op {node.op} not implemented")
+
+def run_ko_source(source: str, file_name: str = "<stdin>") -> None:
+    lexer = KoLexer(source)
+    tokens = lexer.tokenize()
+    parser = KoParser(tokens)
+    program = parser.parse()
+    interpreter = KoInterpreter(program)
+    interpreter.run()
+
+
+def run_ko_file(path: str) -> None:
     with open(path, "r", encoding="utf-8") as handle:
         source = handle.read()
-    code = compile_ko_source(source, file_name=path, enforce_main=True)
-    try:
-        ast.parse(code, filename=path)
-    except SyntaxError as exc:
-        raise KoCompileError(
-            f"Generated Python is invalid: {exc.msg}",
-            line=exc.lineno or 0,
-            column=exc.offset or 0,
-        ) from exc
-    return code
+    run_ko_source(source, file_name=path)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="Compile and run .ko source")
+    parser = argparse.ArgumentParser(description="Run .ko source (v2.505)")
     parser.add_argument("source", help="Path to a .ko file")
-    parser.add_argument("--show-code", action="store_true", help="Print the generated Python instead of executing it")
     args = parser.parse_args(argv)
     if not args.source:
         parser.print_help()
@@ -513,17 +1484,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"File not found: {args.source}", file=sys.stderr)
         return 1
     try:
-        code = compile_ko_file(args.source)
+        run_ko_file(args.source)
     except KoCompileError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
-
-    if args.show_code:
-        print(code)
-        return 0
-
-    namespace = {}
-    exec(code, namespace)
     return 0
 
 

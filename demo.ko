@@ -1,0 +1,111 @@
+| ========================================================== |
+| 1. Nạp Thư viện Chuẩn (Xử lý bởi Import.java Subsystem)    |
+| ========================================================== |
+**Import**($Random)@also%~random!`global`:random
+**Import**($Os)@also%~os!`global`:os
+**Import**($Website)@also%~web!`global`:web
+
+| ========================================================== |
+| 2. Định nghĩa các Hàm Hệ thống                             |
+| ========================================================== |
+init_system_logs() [
+    <printf>^("=== KHOI TAO HE THONG .KO ===")
+    <$os>("log.txt")~log_file
+    <$web>domain("mygame.com")@app_server
+    <$web>("https://api.mygame.com/status")
+    <return>(\True\)
+]
+
+safe_divide(int~dividend, int~divisor) [
+    int(dividend / divisor)~result
+    int(dividend % divisor)~remainder
+    <printf>^("Thương: {result}, Dư: {remainder}")
+    <return>(result)
+]
+
+calculate_crit_damage(int~base_dmg, int~bonus_dmg) [
+    int((base_dmg + bonus_dmg) * 2)~crit_dmg
+    <return>(crit_dmg)
+]
+
+| ---------------------------------------------------------- |
+| Catch chuỗi: Duyệt Top-Down (Sequential Cascade Rule)      |
+| Quét ngược bảo vệ cả 3 hàm: init_system_logs, safe_divide, |
+| và calculate_crit_damage                                  |
+| ---------------------------------------------------------- |
+<catch>(`DivideByZeroError`) [
+    <printf>^("Lỗi {error<"type">} tại dòng {error<"line">}: {error<"code">}. Trả về 0.")
+    <return>(0)
+]
+<catch>(`SystemException`) [
+    <printf>^("Bắt lỗi hệ thống tổng quát phát sinh trong các hàm!")
+    <return>(-1)
+]
+
+| ========================================================== |
+| 3. Định nghĩa Lớp Hero (OOP System)                        |
+| ========================================================== |
+Hero !class [
+    @private [
+        string("")~name
+        int(100)~hp
+        ('Kiem', 'Khien', 'Binh mau')~inventory
+
+        setup_player() [
+            <input>("Nhap ten anh hung cua ban: ")&=name
+            <printf>^("Chao mung anh hung {name} den voi the gioi .ko!")
+            <return>(name)
+        ]
+
+        use_random_item() [
+            int(<$random>(0, 2))~item_index
+            <printf>^("Hero {name} used item: {inventory<item_index>}")
+            <return>(inventory<item_index>)
+        ]
+
+        check_status() [
+            <if>(hp >= 80 && hp <= 100) [
+                <printf>^("Trang thai: Rat khoe")
+            ]
+            <elif>(hp >= 30 %% hp < 80) [
+                <printf>^("Trang thai: Binh thuong")
+            ]
+            <else> [
+                <printf>^("Trang thai: Nguy hiem!")
+            ]
+            <return>(hp)
+        ]
+    ]
+]
+
+| ========================================================== |
+| 4. Khối Thực thi Chính (Main Entry Point Block)           |
+| ========================================================== |
+[
+    booling(~init_system_logs())~is_ready
+    
+    ~Hero~p1
+    string($p1~setup_player())~player_name
+    
+    | Thử nghiệm hàm safe_divide với phép chia cho 0 |
+    int(~safe_divide(100, 0))~calc_test
+    <printf>^("Kết quả kiểm tra chia an toàn: {calc_test}")
+
+    | Vòng lặp đếm i từ 1 đến 5 (Xử lý bởi Loop.cpp Subsystem) |
+    **Loop** <for>(~i=1&=5) [
+        <printf>^("--- Turn {i} ---")
+        string($p1~use_random_item())~used_item
+    ]
+    
+    int($p1~check_status())~current_hp
+    int(~calculate_crit_damage(50, 10))~final_strike
+    <printf>^("Sát thương chí mạng tính toán được: {final_strike}")
+
+    | Thao tác bộ nhớ trực tiếp và giải phóng vùng nhớ |
+    int(999)~temp_data
+    <printf>^("Địa chỉ ô nhớ temp_data: {<memory>^temp_data}")
+    <memory>dete(temp_data)
+]
+<catch>(`GlobalError`) [
+    <printf>^("Bắt lỗi ngoại lệ toàn cục tại dòng {error<"line">}: {error<"code">}")
+]
