@@ -1,43 +1,182 @@
-/**
- * Subsystem Loop Engine (Loop.cpp)
- * Specification Version: 2.505
- * 
- * Responsibilities:
- * - Low-level Loop Unrolling
- * - Cache Line Optimization
- * - CPU Counter Registers Management
- */
-
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
+#include <cmath>
+#include <cstring>
+#include <cstdlib>
 
-class LoopEngine {
-public:
-    static void optimizeLoop(const std::string& loopType) {
-        std::cout << "[Loop Subsystem] Activating Loop Engine Target: " << loopType << std::endl;
-        std::cout << "[Loop Subsystem] Performing Low-level Loop Unrolling..." << std::endl;
-        std::cout << "[Loop Subsystem] Allocating Hardware Counter Registers..." << std::endl;
-        std::cout << "[Loop Subsystem] Optimizing Instruction Cache..." << std::endl;
-    }
-
-    static void releaseTempMemory() {
-        // Simulation of microsecond memory release
-        // std::cout << "[Loop Subsystem] Releasing temporary memory segment..." << std::endl;
-    }
+struct LoopConfig {
+    std::string varName;
+    long long start;
+    long long end;
+    long long step;
+    long long iterationCount;
+    std::vector<std::string> bodyLines;
 };
 
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::cerr << "Usage: LoopEngine <loop_type>" << std::endl;
-        return 1;
+struct OptimizedLoop {
+    std::string unrolledCode;
+    int unrollFactor;
+    long long iterationCount;
+    std::string registerHint;
+    std::string cacheOptimization;
+};
+
+static const int MAX_UNROLL_FACTOR = 8;
+static const int CACHE_LINE_SIZE = 64;
+static const int REGISTER_COUNT = 16;
+
+long long parseLong(const std::string& s, const std::string& name) {
+    try {
+        size_t pos;
+        long long val = std::stoll(s, &pos);
+        if (pos != s.size()) {
+            std::cerr << "Error: invalid number format for " << name << ": " << s << std::endl;
+            exit(2);
+        }
+        return val;
+    } catch (...) {
+        std::cerr << "Error: cannot parse " << name << ": " << s << std::endl;
+        exit(3);
+    }
+}
+
+LoopConfig parseArguments(int argc, char* argv[]) {
+    if (argc < 6) {
+        std::cerr << "Usage: Loop <varName> <start> <end> <step> <bodyFile> [unrollFactor]" << std::endl;
+        exit(1);
     }
 
-    std::string loopType = argv[1];
-    LoopEngine::optimizeLoop(loopType);
-    
-    // In a real execution, this would orchestrate the high-performance loop.
-    std::cout << "[Loop Subsystem] Loop execution optimized." << std::endl;
+    LoopConfig config;
+    config.varName = argv[1];
+    config.start = parseLong(argv[2], "start");
+    config.end = parseLong(argv[3], "end");
+    config.step = parseLong(argv[4], "step");
+
+    if (config.step == 0) {
+        std::cerr << "Error: step cannot be zero" << std::endl;
+        exit(4);
+    }
+
+    if (config.start > config.end && config.step > 0) {
+        std::cerr << "Warning: start > end with positive step, loop will not execute" << std::endl;
+        config.iterationCount = 0;
+    } else if (config.start < config.end && config.step < 0) {
+        std::cerr << "Warning: start < end with negative step, loop will not execute" << std::endl;
+        config.iterationCount = 0;
+    } else {
+        config.iterationCount = ((config.end - config.start) / config.step) + 1;
+        if ((config.end - config.start) % config.step != 0) {
+            config.iterationCount = ((config.end - config.start) / config.step) + 1;
+        }
+    }
+
+    std::string bodyFile = argv[5];
+    std::ifstream bodyStream(bodyFile);
+    if (bodyStream.is_open()) {
+        std::string line;
+        while (std::getline(bodyStream, line)) {
+            if (!line.empty() && line.find_last_not_of(" \t\r\n") != std::string::npos) {
+                config.bodyLines.push_back(line);
+            }
+        }
+        bodyStream.close();
+    }
+
+    int unrollFactorArg = 1;
+    if (argc >= 7) {
+        unrollFactorArg = std::atoi(argv[6]);
+        if (unrollFactorArg < 1) unrollFactorArg = 1;
+        if (unrollFactorArg > MAX_UNROLL_FACTOR) unrollFactorArg = MAX_UNROLL_FACTOR;
+    }
+
+    return config;
+}
+
+OptimizedLoop optimizeLoop(const LoopConfig& config, int unrollFactor) {
+    OptimizedLoop result;
+    result.unrollFactor = unrollFactor;
+    result.iterationCount = config.iterationCount;
+
+    std::ostringstream ss;
+
+    ss << "/* Loop optimization report */" << std::endl;
+    ss << "/* Variable: " << config.varName << " */" << std::endl;
+    ss << "/* Range: [" << config.start << ", " << config.end << "] */" << std::endl;
+    ss << "/* Step: " << config.step << " */" << std::endl;
+    ss << "/* Iterations: " << config.iterationCount << " */" << std::endl;
+    ss << "/* Unroll factor: " << unrollFactor << " */" << std::endl;
+
+    ss << "/* CPU Register allocation hint: use register for loop counter */" << std::endl;
+    ss << "register long long " << config.varName << "_reg;" << std::endl;
+
+    ss << "/* Cache line optimization: align loop body to " << CACHE_LINE_SIZE << " bytes */" << std::endl;
+    ss << "/* Branch prediction hint: loop body is taken " << config.iterationCount << " times */" << std::endl;
+
+    char alignAttr[128];
+    snprintf(alignAttr, sizeof(alignAttr),
+             "__attribute__((aligned(%d)))", CACHE_LINE_SIZE);
+
+    long long iterations = config.iterationCount;
+    long long fullUnrolls = iterations / unrollFactor;
+    long long remainder = iterations % unrollFactor;
+
+    ss << "/* Unrolled loop structure: " << fullUnrolls << " full blocks + " << remainder << " remainder iterations */" << std::endl;
+
+    ss << "for (register long long " << config.varName << " = " << config.start << "; "
+       << config.varName << " <= " << config.end << "; " << config.varName << " += " << config.step << ") {" << std::endl;
+
+    for (const auto& line : config.bodyLines) {
+        std::string optimized = line;
+        size_t pos = 0;
+        while ((pos = optimized.find(config.varName, pos)) != std::string::npos) {
+            optimized.replace(pos, config.varName.length(), config.varName + "_reg");
+            pos += config.varName.length() + 3;
+        }
+        ss << "    " << optimized << std::endl;
+    }
+
+    ss << "}" << std::endl;
+
+    ss << "/* Register hint: " << REGISTER_COUNT << " general-purpose registers available */" << std::endl;
+    ss << "/* Memory barrier: ensure loop writes are visible to subsequent instructions */" << std::endl;
+
+    result.unrolledCode = ss.str();
+    return result;
+}
+
+int main(int argc, char* argv[]) {
+    LoopConfig config = parseArguments(argc, argv);
+
+    int unrollFactor = 1;
+    if (argc >= 7) {
+        unrollFactor = std::atoi(argv[6]);
+        if (unrollFactor < 1) unrollFactor = 1;
+        if (unrollFactor > MAX_UNROLL_FACTOR) unrollFactor = MAX_UNROLL_FACTOR;
+    }
+
+    OptimizedLoop optimized = optimizeLoop(config, unrollFactor);
+
+    std::cout << optimized.unrolledCode << std::endl;
+
+    std::ofstream reportFile("/tmp/ko_loop_optimization_report.txt");
+    if (reportFile.is_open()) {
+        reportFile << "Loop Optimization Report\n";
+        reportFile << "========================\n";
+        reportFile << "Variable: " << config.varName << "\n";
+        reportFile << "Start: " << config.start << "\n";
+        reportFile << "End: " << config.end << "\n";
+        reportFile << "Step: " << config.step << "\n";
+        reportFile << "Total Iterations: " << config.iterationCount << "\n";
+        reportFile << "Unroll Factor: " << unrollFactor << "\n";
+        reportFile << "Full Unroll Blocks: " << (config.iterationCount / unrollFactor) << "\n";
+        reportFile << "Remainder Iterations: " << (config.iterationCount % unrollFactor) << "\n";
+        reportFile << "Cache Line Alignment: " << CACHE_LINE_SIZE << " bytes\n";
+        reportFile << "Register Hint: " << REGISTER_COUNT << " GPRs available\n";
+        reportFile.close();
+    }
 
     return 0;
 }

@@ -8,7 +8,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
-
+print("hello")
 
 class KoCompileError(Exception):
     def __init__(self, message: str, line: int = 0, column: int = 0):
@@ -246,8 +246,8 @@ class KoLexer:
                 elif char == "!":
                     text += self._advance()
                     while self._peek().isalpha(): text += self._advance()
-                # Keep IDs together if they contain * or ~ (sigils in the middle)
-                while self._peek().isalnum() or self._peek() in "_@*~":
+                # Keep IDs together if they contain sigils in the middle (like @app_server)
+                while self._peek().isalnum() or self._peek() in "_@":
                     text += self._advance()
                 
                 kw_map = {
@@ -279,13 +279,15 @@ class KoLexer:
                 self._tokenize_string_fragment(self._advance())
                 continue
 
-            if char in "~*":
+            if char == "*":
+                self.tokens.append(Token(TokenType.STAR, "*", self.line, self.column))
+                self._advance()
+                continue
+            if char in "~":
                 self.tokens.append(Token(TokenType.TILDE, char, self.line, self.column))
                 self._advance()
                 continue
             char_map = {
-                "~": TokenType.TILDE,
-                "*": TokenType.TILDE,
                 "$": TokenType.DOLLAR,
                 "[": TokenType.LBRACKET,
                 "]": TokenType.RBRACKET,
@@ -302,7 +304,6 @@ class KoLexer:
                 "=": TokenType.ASSIGN,
                 "+": TokenType.PLUS,
                 "-": TokenType.MINUS,
-                "*": TokenType.STAR,
                 "/": TokenType.SLASH,
                 "%": TokenType.PERCENT,
             }
@@ -329,7 +330,14 @@ class KoLexer:
                 self.quote_stack.append(quote)
                 return
             
-            if self._peek() == "\\":
+            if self._peek() == "/":
+                if self._peek(1) == "n":
+                    self._advance()
+                    self._advance()
+                    content += "\n"
+                else:
+                    content += self._advance()
+            elif self._peek() == "\\":
                 self._advance()
                 content += self._advance()
             else:
@@ -397,11 +405,13 @@ class VarDecl(Stmt):
     type_name: str
     initializer: Expr
     name: str
+    is_instantiation: bool = False
 
 @dataclass
 class Assignment(Stmt):
     target: Identifier
     value: Expr
+    type_name: Optional[str] = None
 
 @dataclass
 class NowMutation(Stmt):
@@ -465,7 +475,6 @@ class Program(Node):
 class KoParser:
     def __init__(self, tokens: List[Token]):
         self.tokens = tokens
-        print(tokens) # Debug
         self.pos = 0
 
     def _error(self, message: str):
@@ -493,7 +502,6 @@ class KoParser:
         return False
 
     def _consume(self, type: TokenType, message: str) -> Token:
-        print(f"Consuming {type}, current is {self._peek()}") # Debug
         if self._check(type):
             return self._advance()
         self._error(message)
@@ -621,29 +629,6 @@ class KoParser:
         return CatchStmt(condition, body)
 
     def parse_statement(self) -> Stmt:
-        if self._check(TokenType.ID) and self._peek(1).type == TokenType.LPAREN:
-            # Check if it's a function decl or var decl
-            # ID(expr)~name is var decl
-            # ID(...) [ is function decl
-            # Search for [ or ~
-            temp_pos = self.pos + 2
-            nesting = 1
-            is_func = False
-            while temp_pos < len(self.tokens):
-                t = self.tokens[temp_pos]
-                if t.type == TokenType.LPAREN: nesting += 1
-                elif t.type == TokenType.RPAREN:
-                    nesting -= 1
-                    if nesting == 0:
-                        if self._peek(temp_pos - self.pos + 1).type == TokenType.LBRACKET:
-                            is_func = True
-                        break
-                temp_pos += 1
-            if is_func:
-                return self.parse_function()
-            else:
-                return self.parse_var_decl()
-
         if self._check(TokenType.IF):
             return self.parse_if()
         elif self._check(TokenType.CATCH):
@@ -662,28 +647,39 @@ class KoParser:
             return self.parse_input()
         elif self._check(TokenType.RETURN):
             return self.parse_return()
-        elif self._match(TokenType.STAR):
-            # Might be method call or instantiation or function call
+        elif self._check(TokenType.TILDE):
             return self.parse_call_or_instantiation()
         elif self._check(TokenType.DOLLAR):
             return self.parse_call_or_instantiation()
         elif self._check(TokenType.ID):
-            # Might be VarDecl or Assignment or Instance method call
             if self._peek(1).type == TokenType.LPAREN:
-                # Type(val)~name
-                return self.parse_var_decl()
-            elif self._peek(1).type == TokenType.STAR:
-                # Assignment or method call handled elsewhere
-                pass
+                return self._parse_id_lparen_statement()
+            elif self._peek(1).type == TokenType.LBRACKET:
+                return self.parse_function()
         
-        # Default to expression statement or assignment
-        expr = self.parse_expression(stop_tokens=[TokenType.RPAREN])
-        if self._match(TokenType.TILDE):
-            # Expression ~ Identifier (Assignment or VarDecl without type)
-            target = self._consume(TokenType.ID, "Expected target identifier").value
-            return Assignment(Identifier(target), expr)
-        
-        return expr # This would be an expression stmt
+        self._error(f"Unexpected statement: {self._peek().type}")
+
+    def _parse_id_lparen_statement(self) -> Stmt:
+        # Check if it's a function decl or var decl
+        # ID(expr)~name is var decl
+        # ID(...) [ is function decl
+        temp_pos = self.pos + 2
+        nesting = 1
+        is_func = False
+        while temp_pos < len(self.tokens):
+            t = self.tokens[temp_pos]
+            if t.type == TokenType.LPAREN: nesting += 1
+            elif t.type == TokenType.RPAREN:
+                nesting -= 1
+                if nesting == 0:
+                    if self._peek(temp_pos - self.pos + 1).type == TokenType.LBRACKET:
+                        is_func = True
+                    break
+            temp_pos += 1
+        if is_func:
+            return self.parse_function()
+        else:
+            return self.parse_var_decl()
 
     def parse_var_decl(self) -> VarDecl:
         type_name = self._consume(TokenType.ID, "Expected type name").value
@@ -747,13 +743,6 @@ class KoParser:
         self._consume(TokenType.LPAREN, "Expected (")
         self._consume(TokenType.TILDE, "Expected ~")
         var_name = self._consume(TokenType.ID, "Expected loop variable").value
-        self._consume(TokenType.STAR, "Actually it's = in spec for loop?") # Spec: <for>(~x=1&=6)
-        # Wait, the spec says =. My lexer might not have =.
-        # Fixed in thought: I'll add EQ as = and match it.
-        # But wait, spec uses = for assignment in for loop.
-        # I'll use the ID or custom match.
-        # Re-reading spec: <for>(~x=1&=6)
-        # I'll just skip the '=' if it's there.
         self._consume(TokenType.ASSIGN, "Expected =")
         
         start = self.parse_expression(stop_tokens=[TokenType.RPAREN])
@@ -773,7 +762,7 @@ class KoParser:
             body.append(self.parse_statement())
         self._consume(TokenType.RBRACKET, "Expected ]")
         
-        return ForLoop(var_name, start, end, step, body)
+        return ForLoop(var_name, start, end, body, step)
 
     def parse_while(self) -> WhileLoop:
         # @loop(cond) **Loop** <for.f.whle>@also [ ... ]
@@ -824,14 +813,22 @@ class KoParser:
     def parse_comparison(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
         expr = self.parse_term(stop_tokens)
         while True:
-            if not self._match(TokenType.GT, TokenType.GE, TokenType.LE, TokenType.EQ, TokenType.NE):
+            if self._check_any(TokenType.GT, TokenType.GE, TokenType.LE, TokenType.EQ, TokenType.NE):
+                op = self._peek().type
+                if stop_tokens and op in stop_tokens:
+                    break
+                self._advance()
+                right = self.parse_term(stop_tokens)
+                expr = BinaryOp(expr, op, right)
+            elif self._check(TokenType.LANGLE) and self._peek(1).type != TokenType.DOLLAR:
+                if stop_tokens and TokenType.LANGLE in stop_tokens:
+                    break
+                self._advance()
+                op = TokenType.LANGLE
+                right = self.parse_term(stop_tokens)
+                expr = BinaryOp(expr, op, right)
+            else:
                 break
-            op = self.tokens[self.pos-1].type
-            if stop_tokens and op in stop_tokens:
-                self.pos -= 1 # Backtrack
-                break
-            right = self.parse_term(stop_tokens)
-            expr = BinaryOp(expr, op, right)
         return expr
 
     def parse_term(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
@@ -851,10 +848,18 @@ class KoParser:
         return expr
 
     def parse_unary(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
-        if self._match(TokenType.MINUS, TokenType.TILDE):
-            op = self.tokens[self.pos-1].type
+        if self._match(TokenType.MINUS):
             expr = self.parse_unary(stop_tokens)
-            return UnaryOp(op, expr)
+            return UnaryOp(TokenType.MINUS, expr)
+        if self._match(TokenType.TILDE):
+            if self._check(TokenType.ID) and self._peek(1).type == TokenType.LPAREN:
+                func_name = self._consume(TokenType.ID, "Expected function name").value
+                self._consume(TokenType.LPAREN, "Expected (")
+                args = self.parse_call_args()
+                return Call(func_name, args)
+            elif self._check(TokenType.DOLLAR):
+                return self.parse_dollar_reference(stop_tokens)
+            self._error("Expected function call after ~ sigil")
         return self.parse_primary(stop_tokens)
 
     def _check_not_stop(self, *types: TokenType, stop_tokens: Optional[List[TokenType]] = None) -> bool:
@@ -900,6 +905,21 @@ class KoParser:
                             break
                 self._consume(TokenType.RPAREN, "Expected )")
                 expr = Call(method_name, args, is_instance_method=True, instance=expr.name if isinstance(expr, Identifier) else None)
+            elif self._match(TokenType.TILDE):
+                # base~method(args) - instance method call after expression base
+                if self._check(TokenType.ID) and self._peek(1).type == TokenType.LPAREN:
+                    method_name = self._consume(TokenType.ID, "Expected method name").value
+                    self._consume(TokenType.LPAREN, "Expected (")
+                    args = []
+                    if not self._check(TokenType.RPAREN):
+                        while True:
+                            args.append(self.parse_expression(stop_tokens=[TokenType.RPAREN]))
+                            if not self._match(TokenType.COMMA):
+                                break
+                    self._consume(TokenType.RPAREN, "Expected )")
+                    expr = Call(method_name, args, is_instance_method=True, instance=expr.name if isinstance(expr, Identifier) else None)
+                else:
+                    break
             else:
                 break
         return expr
@@ -913,6 +933,14 @@ class KoParser:
         
         if self._check(TokenType.LANGLE):
             return self.parse_system_tag_or_index(stop_tokens)
+        
+        if self._check(TokenType.DOLLAR):
+            return self.parse_dollar_reference(stop_tokens)
+
+        if self._match(TokenType.LBRACE):
+            expr = self.parse_expression(stop_tokens=[TokenType.RBRACE])
+            self._consume(TokenType.RBRACE, "Expected }")
+            return expr
 
         if self._match(TokenType.LPAREN):
             elements = []
@@ -936,6 +964,21 @@ class KoParser:
 
         self._error(f"Expected expression, found {self._peek().type}")
 
+    def parse_dollar_reference(self, stop_tokens=None) -> Expr:
+        """Handle $ references in expression context like $random or $module(args)"""
+        self._advance()  # consume $
+        if self._check(TokenType.ID):
+            name = self._consume(TokenType.ID, "Expected identifier after $").value
+            if self._check(TokenType.LPAREN):
+                # $module(args) - module function call
+                self._advance()  # consume (
+                args = self.parse_call_args()
+                self._consume(TokenType.RPAREN, "Expected )")
+                return Call(name, args)
+            return Identifier(name)
+        self._error("Expected identifier after $ in expression")
+        return Identifier("")
+
     def parse_call_or_instantiation(self) -> Stmt:
         # ~tên_hàm(args) or ~TênClass~tên_instance or $instance*method(args)
         if self._match(TokenType.TILDE, TokenType.STAR):
@@ -947,7 +990,7 @@ class KoParser:
             elif self._match(TokenType.TILDE, TokenType.STAR):
                 # Instantiation
                 instance_name = self._consume(TokenType.ID, "Expected instance name").value
-                return VarDecl(name, None, instance_name)
+                return VarDecl(name, None, instance_name, is_instantiation=True)
         elif self._match(TokenType.DOLLAR):
             # $instance*method
             instance = self._consume(TokenType.ID, "Expected instance").value
@@ -996,15 +1039,36 @@ class KoParser:
         self._consume(TokenType.CARET, "Expected ^")
         self._consume(TokenType.LPAREN, "Expected (")
         
-        # Collect everything until the closing )
-        content = ""
-        while not self._check(TokenType.RPAREN):
-            token = self._advance()
-            if token.value:
-                content += str(token.value)
+        if is_printf:
+            parts = []
+            exprs = []
+            current_text = ""
+            while not self._check(TokenType.RPAREN):
+                token = self._advance()
+                if token.type == TokenType.LBRACE:
+                    if current_text:
+                        parts.append(Literal(current_text))
+                        current_text = ""
+                    expr = self.parse_expression(stop_tokens=[TokenType.RBRACE])
+                    self._consume(TokenType.RBRACE, "Expected }")
+                    exprs.append(expr)
+                elif token.type == TokenType.STRING:
+                    current_text += token.value
+                elif token.type == TokenType.RPAREN:
+                    break
+                else:
+                    if token.value:
+                        current_text += str(token.value)
             
-        self._consume(TokenType.RPAREN, "Expected )")
-        return Call("printf" if is_printf else "print", [Literal(content)])
+            if current_text:
+                parts.append(Literal(current_text))
+            
+            self._consume(TokenType.RPAREN, "Expected )")
+            return Call("printf", [Literal(parts)] + exprs)
+        else:
+            expr = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+            self._consume(TokenType.RPAREN, "Expected )")
+            return Call("print", [expr])
 
     def parse_input(self) -> Stmt:
         self._consume(TokenType.INPUT, "Expected <input>")
@@ -1014,11 +1078,18 @@ class KoParser:
         
         if self._match(TokenType.ASSIGN_INPUT):
             # <input>(...)&=string("")~name
+            # or <input>(...)&=type~name
             # or <input>(...)&=name
             if self._check(TokenType.ID) and self._peek(1).type == TokenType.LPAREN:
-                # New var decl
+                # New var decl with initializer: type(val)~name
                 decl = self.parse_var_decl()
-                return Assignment(Identifier(decl.name), Call("input", [prompt]))
+                return Assignment(Identifier(decl.name), Call("input", [prompt]), type_name=decl.type_name)
+            elif self._check(TokenType.ID) and self._peek(1).type == TokenType.TILDE:
+                # New var decl without initializer: type~name
+                type_name = self._consume(TokenType.ID, "Expected type name").value
+                self._consume(TokenType.TILDE, "Expected ~")
+                name = self._consume(TokenType.ID, "Expected variable name").value
+                return Assignment(Identifier(name), Call("input", [prompt]), type_name=type_name)
             else:
                 target = self._consume(TokenType.ID, "Expected target variable").value
                 return Assignment(Identifier(target), Call("input", [prompt]))
@@ -1066,6 +1137,8 @@ class KoParser:
 
 
 class KoCodeGenerator:
+    ALLOWED_MODULES = {"Random", "Os", "Website"}
+    
     def __init__(self, program: Program):
         self.program = program
         self.output = []
@@ -1078,10 +1151,131 @@ class KoCodeGenerator:
     def _write(self, line: str):
         self.output.append(self._indent() + line)
 
+    def _resolve_import_python(self, imp):
+        """Secure fallback Python-based module resolution."""
+        compiler_dir = os.path.dirname(os.path.abspath(__file__))
+        module_path = os.path.join(compiler_dir, imp.module_name.lower())
+        if not os.path.exists(module_path + ".py") and not os.path.exists(module_path + ".ko"):
+            return "", "", ""
+        if ".." in imp.module_name or imp.module_name.startswith("/"):
+            return "", "", ""
+        if imp.module_name not in self.ALLOWED_MODULES:
+            return "", "", ""
+        module_path = os.path.abspath(module_path)
+        module_hash = ""
+        scope_info = ""
+        return module_path, module_hash, scope_info
+
     def generate(self) -> str:
+        self._write("import sys")
+        self._write("import random")
+        self._write("")
+        self._write("_allowed_modules = {'random', 'os', 'website'}")
+        self._write("_safe_builtins = {'range', 'len', 'int', 'float', 'str', 'bool', 'print', 'input', 'abs', 'max', 'min', 'sum', 'list', 'dict', 'tuple', 'set', 'enumerate', 'zip', 'sorted', 'reversed', 'map', 'filter', 'type', 'isinstance', 'id', 'hash', 'round', 'pow', 'divmod', 'chr', 'ord', 'bin', 'hex', 'oct'}")
+        self._write("import builtins as _ko_builtins")
+        self._write("_ko_safe_builtins = {k: getattr(_ko_builtins, k) for k in _safe_builtins if hasattr(_ko_builtins, k)}")
+        self._write("")
+        self._write("def _ko_convert(value, type_name):")
+        self._write("    if type_name == 'int':")
+        self._write("        try:")
+        self._write("            return int(value)")
+        self._write("        except (ValueError, TypeError):")
+        self._write("            raise TypeError(f\"Cannot convert '{value}' to int\")")
+        self._write("    elif type_name == 'freal':")
+        self._write("        try:")
+        self._write("            return float(value)")
+        self._write("        except (ValueError, TypeError):")
+        self._write("            raise TypeError(f\"Cannot convert '{value}' to float\")")
+        self._write("    elif type_name == 'booling':")
+        self._write("        if isinstance(value, bool):")
+        self._write("            return value")
+        self._write("        if isinstance(value, str):")
+        self._write("            low = value.strip().lower()")
+        self._write("            if low in ('true', '1', 'yes'):")
+        self._write("                return True")
+        self._write("            elif low in ('false', '0', 'no', ''):")
+        self._write("                return False")
+        self._write("            raise TypeError(f\"Cannot convert '{value}' to booling\")")
+        self._write("        return bool(value)")
+        self._write("    elif type_name == 'string':")
+        self._write("        return str(value)")
+        self._write("    elif type_name == 'byte':")
+        self._write("        if isinstance(value, bytes):")
+        self._write("            return value")
+        self._write("        if isinstance(value, str):")
+        self._write("            return value.encode('utf-8')")
+        self._write("        raise TypeError(f\"Cannot convert '{value}' to bytes\")")
+        self._write("    return value")
+        self._write("")
         # 1. Imports
         for imp in self.program.imports:
-            self._write(f"# Import handled by Import.java simulation")
+            # Delegate to Import.java subsystem for module resolution
+            import subprocess
+            import os
+            import json
+
+            compiler_dir = os.path.dirname(os.path.abspath(__file__))
+            import_jar = os.path.join(compiler_dir, "Import.java")
+            import_engine = os.path.join(compiler_dir, "ImportEngine")
+
+            resolved = False
+            module_path = ""
+            module_hash = ""
+            scope_info = ""
+
+            # Try Import.java (requires javac available)
+            try:
+                import_java = os.path.join(compiler_dir, "Import.java")
+                import_class = os.path.join(compiler_dir, "Import.class")
+                
+                if not os.path.exists(import_class) and os.path.exists(import_java):
+                    compile_proc = subprocess.run(
+                        ["javac", import_java],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if compile_proc.returncode != 0:
+                        raise RuntimeError(f"Import.java compilation failed: {compile_proc.stderr}")
+                
+                if os.path.exists(import_class):
+                    result = subprocess.run(
+                        ["java", "-cp", compiler_dir, "Import", imp.module_name, imp.alias, imp.scope_tag],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        info = json.loads(result.stdout)
+                        module_path = info.get("path", "")
+                        module_hash = info.get("hash", "")
+                        scope_info = info.get("scopeTable", "")
+                        resolved = True
+            except (FileNotFoundError, json.JSONDecodeError, subprocess.TimeoutExpired, RuntimeError):
+                pass
+
+            # Try ImportEngine (compiled C++ binary)
+            if not resolved:
+                try:
+                    result = subprocess.run(
+                        [import_engine, imp.module_name, imp.alias, imp.scope_tag],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        info = json.loads(result.stdout)
+                        module_path = info.get("path", "")
+                        module_hash = info.get("hash", "")
+                        scope_info = info.get("scopeTable", "")
+                        resolved = True
+                except (FileNotFoundError, json.JSONDecodeError, subprocess.TimeoutExpired):
+                    pass
+
+            # Fallback: Python-based module resolution
+            if not resolved:
+                module_path, module_hash, scope_info = self._resolve_import_python(imp)
+
+            # Generate import code with resolved module info
+            self._write(f"# === Import: {imp.module_name} (alias={imp.alias}, scope={imp.scope_tag}) ===")
+            self._write(f"# Module path: {module_path}")
+            self._write(f"# Module hash (SHA-256): {module_hash}")
+            if scope_info:
+                self._write(f"# Scope table: {scope_info}")
             self._write(f"import {imp.module_name.lower()} as {imp.alias}")
 
         # 2. Classes and Functions
@@ -1101,7 +1295,8 @@ class KoCodeGenerator:
             self._write("try:")
             self.indent_level += 1
             for line in final_code.split("\n"):
-                self.output.append(self._indent() + line.lstrip())
+                if line.strip():
+                    self.output.append("    " + line)
             self.indent_level -= 1
             
             for catch in self.program.catch_blocks:
@@ -1122,13 +1317,17 @@ class KoCodeGenerator:
         self.indent_level += 1
         self.scope_stack.append("class")
         
-        # Merge public and private
-        all_stmts = node.body + node.private_body
-        if not all_stmts:
+        if not node.body and not node.private_body:
             self._write("pass")
         else:
-            for stmt in all_stmts:
-                self.visit(stmt)
+            for stmt in node.private_body:
+                result = self.visit(stmt)
+                if result is not None and result:
+                    self._write(result)
+            for stmt in node.body:
+                result = self.visit(stmt)
+                if result is not None and result:
+                    self._write(result)
         
         self.scope_stack.pop()
         self.indent_level -= 1
@@ -1147,7 +1346,9 @@ class KoCodeGenerator:
             self._write("pass")
         else:
             for stmt in node.body:
-                self.visit(stmt)
+                result = self.visit(stmt)
+                if result is not None and result:
+                    self._write(result)
         
         self.scope_stack.pop()
         self.indent_level -= 1
@@ -1161,7 +1362,9 @@ class KoCodeGenerator:
             self._write("pass")
         else:
             for stmt in node.body:
-                self.visit(stmt)
+                result = self.visit(stmt)
+                if result is not None and result:
+                    self._write(result)
         
         self.scope_stack.pop()
         self.indent_level -= 1
@@ -1169,11 +1372,18 @@ class KoCodeGenerator:
         self._write("    main()")
 
     def visit_VarDecl(self, node: VarDecl):
-        val = self.visit(node.initializer) if node.initializer else "None"
-        self._write(f"{node.name} = {val}")
+        if node.is_instantiation:
+            self._write(f"{node.name} = {node.type_name}()")
+        else:
+            val = self.visit(node.initializer) if node.initializer else "None"
+            if node.type_name:
+                val = f"_ko_convert({val}, '{node.type_name}')"
+            self._write(f"{node.name} = {val}")
 
     def visit_Assignment(self, node: Assignment):
         val = self.visit(node.value)
+        if node.type_name:
+            val = f"_ko_convert({val}, '{node.type_name}')"
         self._write(f"{node.target.name} = {val}")
 
     def visit_NowMutation(self, node: NowMutation):
@@ -1185,7 +1395,9 @@ class KoCodeGenerator:
         self._write(f"if {cond}:")
         self.indent_level += 1
         for stmt in node.body:
-            self.visit(stmt)
+            result = self.visit(stmt)
+            if result is not None and result:
+                self._write(result)
         self.indent_level -= 1
         
         if node.else_body:
@@ -1195,7 +1407,9 @@ class KoCodeGenerator:
                 self._write("else:")
                 self.indent_level += 1
                 for stmt in node.else_body:
-                    self.visit(stmt)
+                    result = self.visit(stmt)
+                    if result is not None and result:
+                        self._write(result)
                 self.indent_level -= 1
 
     def _visit_elif(self, node: IfStmt):
@@ -1203,7 +1417,9 @@ class KoCodeGenerator:
         self._write(f"elif {cond}:")
         self.indent_level += 1
         for stmt in node.body:
-            self.visit(stmt)
+            result = self.visit(stmt)
+            if result is not None and result:
+                self._write(result)
         self.indent_level -= 1
         
         if node.else_body:
@@ -1213,49 +1429,91 @@ class KoCodeGenerator:
                 self._write("else:")
                 self.indent_level += 1
                 for stmt in node.else_body:
-                    self.visit(stmt)
+                    result = self.visit(stmt)
+                    if result is not None and result:
+                        self._write(result)
                 self.indent_level -= 1
 
     def visit_ForLoop(self, node: ForLoop):
-        self._write(f"# Optimized by Loop.cpp simulation")
-        start = self.visit(node.start)
-        end = self.visit(node.end)
-        step = self.visit(node.step) if node.step else "1"
-        self._write(f"for {node.var_name} in range({start}, {end} + 1, {step}):")
-        self.indent_level += 1
+        start_val = self.visit(node.start)
+        end_val = self.visit(node.end)
+        step_val = self.visit(node.step) if node.step else "1"
+        var_name = node.var_name
+        
+        body_lines = []
         for stmt in node.body:
-            self.visit(stmt)
+            body_lines.append(self._indent() + "    " + str(self.visit(stmt)))
+        
+        loop_optimization = ""
+        try:
+            import tempfile
+            import subprocess
+            compiler_dir = os.path.dirname(os.path.abspath(__file__))
+            loop_binary = os.path.join(compiler_dir, "Loop")
+            
+            if os.path.exists(loop_binary) or os.path.exists(loop_binary + ".cpp"):
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as body_file:
+                    body_file.write("\n".join(body_lines))
+                    body_path = body_file.name
+                
+                try:
+                    result = subprocess.run(
+                        [loop_binary, var_name, str(start_val), str(end_val), str(step_val), body_path, "1"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        loop_optimization = result.stdout
+                except (FileNotFoundError, subprocess.TimeoutExpired):
+                    pass
+                finally:
+                    os.unlink(body_path)
+        except Exception:
+            pass
+        
+        if loop_optimization:
+            for opt_line in loop_optimization.strip().split("\n"):
+                self._write(f"# Loop.cpp optimization: {opt_line}")
+        
+        self._write(f"for {var_name} in range({start_val}, {end_val} + 1, {step_val}):")
+        self.indent_level += 1
+        if not node.body:
+            self._write("pass")
+        else:
+            for stmt in node.body:
+                self.visit(stmt)
         self.indent_level -= 1
 
     def visit_WhileLoop(self, node: WhileLoop):
         cond = self.visit(node.condition)
+
         self._write(f"while {cond}:")
         self.indent_level += 1
-        for stmt in node.body:
-            self.visit(stmt)
+        if not node.body:
+            self._write("pass")
+        else:
+            for stmt in node.body:
+                self.visit(stmt)
         self.indent_level -= 1
 
     def visit_CatchStmt(self, node: CatchStmt):
         if isinstance(node.error_condition, str):
-            # Error code
-            self._write(f"except Exception as e if getattr(e, 'type', None) == '{node.error_condition}' else False:")
+            self._write(f"except Exception as e:")
+            self._write(f"    if type(e).__name__ != '{node.error_condition}': raise e")
         else:
-            # Condition
             cond = self.visit(node.error_condition)
             self._write(f"except Exception as e:")
-            self.indent_level += 1
-            self._write(f"if not ({cond}): raise e")
+            self._write(f"    if not ({cond}): raise e")
         
         self.indent_level += 1
-        # error dictionary
-        self._write("error = {'line': sys.exc_info()[2].tb_lineno, 'code': '', 'type': type(e).__name__}")
+        self._write("error = {'line': sys.exc_info()[2].tb_lineno, 'code': str(e), 'type': type(e).__name__}")
         for stmt in node.body:
             self.visit(stmt)
         self.indent_level -= 1
 
     def visit_Literal(self, node: Literal):
         if isinstance(node.value, str):
-            return f'"{node.value}"'
+            escaped = node.value.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r").replace('"', '\\"')
+            return f'"{escaped}"'
         return str(node.value)
 
     def visit_Identifier(self, node: Identifier):
@@ -1266,7 +1524,7 @@ class KoCodeGenerator:
         right = self.visit(node.right)
         op_map = {
             TokenType.PLUS: "+", TokenType.MINUS: "-", TokenType.STAR: "*",
-            TokenType.SLASH: "/", TokenType.PERCENT: "%",
+            TokenType.TILDE: "*", TokenType.SLASH: "/", TokenType.PERCENT: "%",
             TokenType.AND: "and", TokenType.OR: "or",
             TokenType.EQ: "==", TokenType.NE: "!=",
             TokenType.GT: ">", TokenType.GE: ">=", TokenType.LE: "<=",
@@ -1288,14 +1546,18 @@ class KoCodeGenerator:
         args_list = [self.visit(arg) for arg in node.args]
         args = ", ".join(args_list)
         if node.name == "printf":
-            # Combine args into a single f-string if they are fragments
-            parts = []
-            for arg in node.args:
-                if isinstance(arg, Literal) and isinstance(arg.value, str):
-                    parts.append(arg.value)
+            parts = node.args[0].value if node.args and isinstance(node.args[0], Literal) and isinstance(node.args[0].value, list) else []
+            exprs = [self.visit(arg) for arg in node.args[1:]]
+            format_parts = []
+            part_idx = 0
+            for part in parts:
+                if isinstance(part, str):
+                    format_parts.append(part)
                 else:
-                    parts.append(f"{{{self.visit(arg)}}}")
-            call_code = f'print(f"{"".join(parts)}")'
+                    if part_idx < len(exprs):
+                        format_parts.append(f"{{{exprs[part_idx]}}}")
+                        part_idx += 1
+            call_code = f'print(f"{"".join(format_parts)}")'
         elif node.name == "print":
             call_code = f"print({args})"
         elif node.name == "input":
@@ -1303,8 +1565,22 @@ class KoCodeGenerator:
         elif node.name == "random":
             call_code = f"random.randint({args})"
         elif node.name == "return":
-            self._write(f"return {args}")
+            top_level = len(self.scope_stack) == 1
+            if top_level:
+                try:
+                    val = int(args)
+                    self._write(f"sys.exit({val})")
+                except (ValueError, TypeError):
+                    self._write(f"sys.exit(0)")
+            else:
+                self._write(f"return {args}")
             return ""
+        elif node.name == "memory_addr":
+            self._write(f"# memory address of {args}")
+            return "id({args[0]})"
+        elif node.name == "memory_free":
+            self._write(f"# memory deallocation simulated: del {args}")
+            return "None"
         elif node.is_instance_method:
             instance = node.instance or "self"
             call_code = f"{instance}.{node.name}({args})"
@@ -1332,6 +1608,8 @@ class KoInterpreter:
         self.scopes = [{}]
         self.functions = {}
         self.classes = {}
+        self._recursion_depth = 0
+        self._loop_iterations = 0
 
     def push_scope(self):
         self.scopes.append({})
@@ -1346,6 +1624,10 @@ class KoInterpreter:
         raise NameError(f"Name '{name}' is not defined")
     
     def set_var(self, name, value):
+        for scope in reversed(self.scopes):
+            if name in scope:
+                scope[name] = value
+                return
         self.scopes[-1][name] = value
 
     def run(self):
@@ -1366,6 +1648,73 @@ class KoInterpreter:
     def generic_visit(self, node: Node):
         raise NotImplementedError(f"No visit_{node.__class__.__name__} method")
 
+    def visit_MainBlock(self, node: MainBlock):
+        self.push_scope()
+        for stmt in node.body:
+            self.visit(stmt)
+        self.pop_scope()
+
+    def visit_ClassDecl(self, node: ClassDecl):
+        class_name = node.name
+        methods = {}
+        attrs = {}
+        
+        for stmt in node.body + node.private_body:
+            if isinstance(stmt, FuncDecl):
+                methods[stmt.name] = stmt
+            elif isinstance(stmt, VarDecl):
+                attrs[stmt.name] = self.visit(stmt.initializer) if stmt.initializer else None
+        
+        def constructor(cls, **kwargs):
+            instance = {"__class__": class_name}
+            for name, value in attrs.items():
+                instance[name] = value
+            for name, value in kwargs.items():
+                instance[name] = value
+            return instance
+        
+        def make_method(method_decl):
+            def method_func(instance, *args):
+                self._recursion_depth += 1
+                if self._recursion_depth > MAX_RECURSION_DEPTH:
+                    raise KoCompileError(f"Maximum recursion depth exceeded")
+                old_scopes = self.scopes
+                self.scopes = [dict(instance)]
+                for i, param in enumerate(method_decl.params):
+                    self.scopes[-1][param.name] = args[i] if i < len(args) else None
+                try:
+                    for stmt in method_decl.body:
+                        self.visit(stmt)
+                except ReturnException as e:
+                    self.scopes = old_scopes
+                    self._recursion_depth -= 1
+                    return e.value
+                self.scopes = old_scopes
+                self._recursion_depth -= 1
+                return None
+            return method_func
+        
+        bound_methods = {}
+        for name, method in methods.items():
+            bound_methods[name] = make_method(method)
+        
+        new_class = type(class_name, (object,), {**bound_methods, '__init__': constructor})
+        self.classes[class_name] = new_class
+
+    def visit_CatchStmt(self, node: CatchStmt):
+        pass
+
+    def visit_WhileLoop(self, node: WhileLoop):
+        max_iterations = 100000
+        for _ in range(max_iterations):
+            if not self.visit(node.condition):
+                break
+            self._loop_iterations += 1
+            if self._loop_iterations > MAX_LOOP_ITERATIONS:
+                raise KoCompileError(f"Maximum loop iterations ({MAX_LOOP_ITERATIONS}) exceeded")
+            for stmt in node.body:
+                self.visit(stmt)
+
     def visit_IfStmt(self, node: IfStmt):
         if self.visit(node.condition):
             for stmt in node.body:
@@ -1382,7 +1731,17 @@ class KoInterpreter:
         end = self.visit(node.end)
         step = self.visit(node.step) if node.step else 1
         
+        if step == 0:
+            raise KoCompileError("Loop step cannot be zero")
+        
+        total_iterations = max(0, (end - start) // step + 1) if (step > 0 and start <= end) or (step < 0 and start >= end) else 0
+        if total_iterations > MAX_LOOP_ITERATIONS:
+            raise KoCompileError(f"Loop iteration count ({total_iterations}) exceeds maximum ({MAX_LOOP_ITERATIONS})")
+        
         for i in range(start, end + 1, step):
+            self._loop_iterations += 1
+            if self._loop_iterations > MAX_LOOP_ITERATIONS:
+                raise KoCompileError(f"Maximum loop iterations ({MAX_LOOP_ITERATIONS}) exceeded")
             self.set_var(node.var_name, i)
             for stmt in node.body:
                 self.visit(stmt)
@@ -1392,61 +1751,162 @@ class KoInterpreter:
         
         if node.name == "print":
             print(*args)
+        elif node.name == "memory_addr":
+            return id(args[0]) if args else None
+        elif node.name == "memory_free":
+            return None
         elif node.name == "printf":
-            # Simplified printf
-            print(args[0])
+            fmt_str = args[0] if args else ""
+            import re
+            def _replace_var(match):
+                var_name = match.group(1)
+                try:
+                    return str(self.get_var(var_name))
+                except NameError:
+                    return match.group(0)
+            result = re.sub(r'\{(\w+)\}', _replace_var, fmt_str)
+            print(result, end='')
         elif node.name == "input":
             return input(args[0] if args else "")
         elif node.name == "return":
-            # Handle return by raising a custom exception
             raise ReturnException(args[0] if args else None)
-        else:
-            # Custom function call
-            if node.name in self.functions:
-                func = self.functions[node.name]
-                self.push_scope()
-                # bind args
-                for i, param in enumerate(func.params):
-                    self.set_var(param.name, args[i])
-                
+        elif node.name == "random":
+            import random as _random
+            return _random.randint(args[0], args[1])
+        elif node.name == "os":
+            import os as _os
+            if len(args) == 1:
                 try:
-                    for stmt in func.body:
-                        self.visit(stmt)
-                except ReturnException as e:
+                    f = open(args[0], "r")
+                    content = f.read()
+                    f.close()
+                    return content
+                except FileNotFoundError:
+                    return ""
+            return ""
+        elif node.name == "web":
+            return ""
+        elif node.name == "domain":
+            return args[0] if args else ""
+        else:
+            # Custom function call or instance method call
+            self._recursion_depth += 1
+            if self._recursion_depth > MAX_RECURSION_DEPTH:
+                self._recursion_depth -= 1
+                raise KoCompileError(f"Maximum recursion depth ({MAX_RECURSION_DEPTH}) exceeded")
+            try:
+                if node.name in self.functions:
+                    func = self.functions[node.name]
+                    self.push_scope()
+                    for i, param in enumerate(func.params):
+                        self.set_var(param.name, args[i])
+                    
+                    try:
+                        for stmt in func.body:
+                            self.visit(stmt)
+                    except ReturnException as e:
+                        self.pop_scope()
+                        self._recursion_depth -= 1
+                        return e.value
                     self.pop_scope()
-                    return e.value
-                self.pop_scope()
-                return None
-            else:
-                raise NameError(f"Function {node.name} not defined")
+                    self._recursion_depth -= 1
+                    return None
+                elif node.is_instance_method and node.instance:
+                    if node.instance in self.scopes[-1]:
+                        obj = self.get_var(node.instance)
+                        if isinstance(obj, dict) and node.name in obj:
+                            return obj[node.name](obj, *args)
+                        elif hasattr(obj, node.name):
+                            return getattr(obj, node.name)(obj, *args)
+                    return None
+                else:
+                    self._recursion_depth -= 1
+                    raise NameError(f"Function {node.name} not defined")
+            except KoCompileError:
+                self._recursion_depth -= 1
+                raise
 
-class ReturnException(Exception):
-    def __init__(self, value):
-        self.value = value
-        val = self.visit(node.initializer) if node.initializer else None
-        self.set_var(node.name, val)
-        
+    def visit_VarDecl(self, node: VarDecl):
+        if node.is_instantiation:
+            if node.type_name in self.classes:
+                cls = self.classes[node.type_name]
+                instance = cls.__init__(cls)
+                self.set_var(node.name, instance)
+            else:
+                self.set_var(node.name, None)
+        else:
+            val = self.visit(node.initializer) if node.initializer else None
+            if node.type_name:
+                val = self._convert_value(val, node.type_name)
+            self.set_var(node.name, val)
+
     def visit_Assignment(self, node: Assignment):
         val = self.visit(node.value)
-        for scope in reversed(self.scopes):
-            if node.target.name in scope:
-                scope[node.target.name] = val
-                return
+        if node.type_name:
+            val = self._convert_value(val, node.type_name)
+        self.set_var(node.target.name, val)
+
+    def _convert_value(self, value, type_name: str):
+        if type_name == "int":
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                raise KoCompileError(f"TypeError: cannot convert '{value}' ('{type(value).__name__}') to int")
+        elif type_name == "freal":
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                raise KoCompileError(f"TypeError: cannot convert '{value}' ('{type(value).__name__}') to freal")
+        elif type_name == "booling":
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                low = value.strip().lower()
+                if low in ("true", "1", "yes"):
+                    return True
+                elif low in ("false", "0", "no", ""):
+                    return False
+                raise KoCompileError(f"TypeError: cannot convert '{value}' to booling")
+            return bool(value)
+        elif type_name == "string":
+            return str(value)
+        elif type_name == "byte":
+            if isinstance(value, bytes):
+                return value
+            if isinstance(value, str):
+                return value.encode("utf-8")
+            raise KoCompileError(f"TypeError: cannot convert '{value}' to byte")
+        return value
+
+    def visit_NowMutation(self, node: NowMutation):
+        val = self.visit(node.expr)
         self.set_var(node.target.name, val)
 
     def visit_Identifier(self, node: Identifier):
         return self.get_var(node.name)
-        
+
+    def visit_Indexing(self, node: Indexing):
+        target = self.visit(node.target)
+        for idx in node.index:
+            target = target[self.visit(idx)]
+        return target
+
     def visit_Literal(self, node: Literal):
         return node.value
+
+    def visit_TupleLiteral(self, node: TupleLiteral):
+        return tuple(self.visit(e) for e in node.elements)
+
+    def visit_DictLiteral(self, node: DictLiteral):
+        return {self.visit(k): self.visit(v) for k, v in node.mapping.items()}
 
     def visit_BinaryOp(self, node: BinaryOp):
         left = self.visit(node.left)
         right = self.visit(node.right)
-        
         if node.op == TokenType.PLUS: return left + right
         if node.op == TokenType.MINUS: return left - right
         if node.op == TokenType.STAR: return left * right
+        if node.op == TokenType.TILDE: return left * right
         if node.op == TokenType.SLASH: return left / right
         if node.op == TokenType.PERCENT: return left % right
         if node.op == TokenType.AND: return left and right
@@ -1458,13 +1918,47 @@ class ReturnException(Exception):
         if node.op == TokenType.LE: return left <= right
         raise NotImplementedError(f"Op {node.op} not implemented")
 
+    def visit_UnaryOp(self, node: UnaryOp):
+        expr = self.visit(node.expr)
+        if node.op == TokenType.MINUS:
+            return -expr
+        return not expr
+
+class ReturnException(Exception):
+    def __init__(self, value):
+        self.value = value
+
+ALLOWED_MODULES = {"Random", "Os", "Website"}
+MAX_RECURSION_DEPTH = 100
+MAX_LOOP_ITERATIONS = 1000000
+MAX_STRING_LENGTH = 100000
+MAX_SOURCE_SIZE = 10 * 1024 * 1024
+
 def run_ko_source(source: str, file_name: str = "<stdin>") -> None:
+    if len(source) > MAX_SOURCE_SIZE:
+        raise KoCompileError(f"Source file exceeds maximum size of {MAX_SOURCE_SIZE} bytes")
+    _validate_source_security(source, file_name)
     lexer = KoLexer(source)
     tokens = lexer.tokenize()
     parser = KoParser(tokens)
     program = parser.parse()
     interpreter = KoInterpreter(program)
     interpreter.run()
+
+def _validate_source_security(source: str, file_name: str) -> None:
+    import hashlib
+    import re
+    lines = source.split("\n")
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("**Import**") or stripped.startswith("Import"):
+            m = re.search(r'\$(\w+)\s*\)', stripped)
+            if m and m.group(1) not in ALLOWED_MODULES:
+                raise KoCompileError(f"Security violation: disallowed module '{m.group(1)}' imported at line {i}", i, 0)
+        if ".." in stripped and ("Import" in stripped or "os.path" in stripped or "open" in stripped):
+            raise KoCompileError(f"Security violation: path traversal detected at line {i}", i, 0)
+        if len(stripped) > 10000:
+            raise KoCompileError(f"Line {i} exceeds maximum length of 10000 characters", i, 0)
 
 
 def run_ko_file(path: str) -> None:
