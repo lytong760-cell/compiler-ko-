@@ -16,6 +16,7 @@ public class Import {
     ));
 
     private static final Pattern SAFE_PATH = Pattern.compile("^[a-zA-Z0-9_./-]+$");
+    private static final long MAX_MODULE_SIZE = 10 * 1024 * 1024;
 
     public static void main(String[] args) {
         if (args.length < 2) {
@@ -29,6 +30,8 @@ public class Import {
 
         try {
             validateModuleName(moduleName);
+            validateAlias(alias);
+            validateScopeTag(scopeTag);
             ImportResult result = resolveAndVerify(moduleName, alias, scopeTag);
             System.out.println(result.toJson());
         } catch (SecurityException e) {
@@ -44,6 +47,9 @@ public class Import {
         if (moduleName == null || moduleName.isEmpty()) {
             throw new SecurityException("Module name cannot be empty");
         }
+        if (moduleName.length() > 64) {
+            throw new SecurityException("Module name exceeds maximum length of 64 characters");
+        }
         if (!SAFE_PATH.matcher(moduleName).matches()) {
             throw new SecurityException("Invalid module name: contains unsafe characters");
         }
@@ -52,6 +58,27 @@ public class Import {
         }
         if (!ALLOWED_MODULES.contains(moduleName)) {
             throw new SecurityException("Module '" + moduleName + "' is not in the allowed module list");
+        }
+    }
+
+    static void validateAlias(String alias) throws SecurityException {
+        if (alias == null || alias.isEmpty()) {
+            throw new SecurityException("Alias cannot be empty");
+        }
+        if (!SAFE_PATH.matcher(alias).matches()) {
+            throw new SecurityException("Invalid alias: contains unsafe characters");
+        }
+        if (alias.length() > 64) {
+            throw new SecurityException("Alias exceeds maximum length of 64 characters");
+        }
+    }
+
+    static void validateScopeTag(String scopeTag) throws SecurityException {
+        if (scopeTag == null || scopeTag.isEmpty()) {
+            throw new SecurityException("Scope tag cannot be empty");
+        }
+        if (!scopeTag.matches("^[a-zA-Z_][a-zA-Z0-9_]*$")) {
+            throw new SecurityException("Invalid scope tag format");
         }
     }
 
@@ -70,12 +97,21 @@ public class Import {
             modulePath = moduleDir.resolve(moduleName + ".py");
         }
 
-        String absolutePath = modulePath.toAbsolutePath().toString();
-        String moduleHash = computeFileHash(modulePath);
+        if (!Files.exists(modulePath)) {
+            throw new SecurityException("Module file not found: " + moduleName);
+        }
 
-        if (modulePath.toFile().length() == 0) {
+        long fileSize = Files.size(modulePath);
+        if (fileSize > MAX_MODULE_SIZE) {
+            throw new SecurityException("Module file exceeds maximum size of " + MAX_MODULE_SIZE + " bytes");
+        }
+
+        if (fileSize == 0) {
             throw new SecurityException("Empty module file: " + moduleName);
         }
+
+        String absolutePath = modulePath.toAbsolutePath().toString();
+        String moduleHash = computeFileHash(modulePath);
 
         String scopeTable = ingestScopeTable(modulePath, scopeTag);
 

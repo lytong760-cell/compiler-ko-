@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <climits>
 
 struct LoopConfig {
     std::string varName;
@@ -27,6 +28,7 @@ struct OptimizedLoop {
 static const int MAX_UNROLL_FACTOR = 8;
 static const int CACHE_LINE_SIZE = 64;
 static const int REGISTER_COUNT = 16;
+static const long long MAX_ITERATIONS = 10000000;
 
 long long parseLong(const std::string& s, const std::string& name) {
     try {
@@ -51,6 +53,17 @@ LoopConfig parseArguments(int argc, char* argv[]) {
 
     LoopConfig config;
     config.varName = argv[1];
+    if (config.varName.empty() || config.varName.length() > 64) {
+        std::cerr << "Error: invalid loop variable name" << std::endl;
+        exit(1);
+    }
+    for (char c : config.varName) {
+        if (!std::isalnum(c) && c != '_') {
+            std::cerr << "Error: loop variable name contains invalid character: " << c << std::endl;
+            exit(1);
+        }
+    }
+
     config.start = parseLong(argv[2], "start");
     config.end = parseLong(argv[3], "end");
     config.step = parseLong(argv[4], "step");
@@ -60,20 +73,29 @@ LoopConfig parseArguments(int argc, char* argv[]) {
         exit(4);
     }
 
-    if (config.start > config.end && config.step > 0) {
-        std::cerr << "Warning: start > end with positive step, loop will not execute" << std::endl;
-        config.iterationCount = 0;
-    } else if (config.start < config.end && config.step < 0) {
-        std::cerr << "Warning: start < end with negative step, loop will not execute" << std::endl;
+    if ((config.step > 0 && config.start > config.end) || (config.step < 0 && config.start < config.end)) {
+        std::cerr << "Warning: loop range is empty with given start/end/step" << std::endl;
         config.iterationCount = 0;
     } else {
         config.iterationCount = ((config.end - config.start) / config.step) + 1;
-        if ((config.end - config.start) % config.step != 0) {
-            config.iterationCount = ((config.end - config.start) / config.step) + 1;
-        }
+    }
+
+    if (config.iterationCount > MAX_ITERATIONS) {
+        std::cerr << "Error: loop iteration count (" << config.iterationCount << ") exceeds maximum (" << MAX_ITERATIONS << ")" << std::endl;
+        exit(5);
+    }
+
+    if (config.iterationCount < 0) {
+        std::cerr << "Error: negative iteration count detected (integer overflow)" << std::endl;
+        exit(6);
     }
 
     std::string bodyFile = argv[5];
+    if (bodyFile.find("..") != std::string::npos || bodyFile.find("/") != std::string::npos) {
+        std::cerr << "Error: invalid body file path" << std::endl;
+        exit(1);
+    }
+
     std::ifstream bodyStream(bodyFile);
     if (bodyStream.is_open()) {
         std::string line;

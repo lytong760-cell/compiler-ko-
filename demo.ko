@@ -9,7 +9,7 @@
 | 2. Định nghĩa các Hàm Hệ thống                             |
 | ========================================================== |
 init_system_logs() [
-    <printf>^("=== KHOI TAO HE THONG .KO ===/n")
+    <printf>^("=== KHOI TAO HE THONG .KO ===\n")
     <$os>("log.txt")~log_file
     <$web>domain("mygame.com")@app_server
     <$web>("https://api.mygame.com/status")
@@ -19,7 +19,7 @@ init_system_logs() [
 safe_divide(int~dividend, int~divisor) [
     int(dividend / divisor)~result
     int(dividend % divisor)~remainder
-    <printf>^("Thương: {result}, Dư: {remainder}/n")
+    <printf>^("Thương: {result}, Dư: {remainder}\n")
     <return>(result)
 ]
 
@@ -34,11 +34,11 @@ calculate_crit_damage(int~base_dmg, int~bonus_dmg) [
 | và calculate_crit_damage                                  |
 | ---------------------------------------------------------- |
 <catch>(`DivideByZeroError`) [
-    <printf>^("Lỗi {error<"type">} tại dòng {error<"line">}: {error<"code">}. Trả về 0./n")
+    <printf>^("Lỗi {error<"type">} tại dòng {error<"line">}: {error<"code">}. Trả về 0.\n")
     <return>(0)
 ]
 <catch>(`SystemException`) [
-    <printf>^("Bắt lỗi hệ thống tổng quát phát sinh trong các hàm!/n")
+    <printf>^("Bắt lỗi hệ thống tổng quát phát sinh trong các hàm!\n")
     <return>(-1)
 ]
 
@@ -52,26 +52,26 @@ Hero !class [
         ('Kiem', 'Khien', 'Binh mau')~inventory
 
         setup_player() [
-            <input>("Nhap ten anh hung cua ban: /n")&=name
-            <printf>^("Chao mung anh hung {name} den voi the gioi .ko!/n")
+            <input>("Nhap ten anh hung cua ban: \n")&=name
+            <printf>^("Chao mung anh hung {name} den voi the gioi .ko!\n")
             <return>(name)
         ]
 
         use_random_item() [
             int(<$random>(0, 2))~item_index
-            <printf>^("Hero {name} used item: {inventory<{item_index}>}/n")
+            <printf>^("Hero {name} used item: {inventory<{item_index}>}\n")
             <return>(inventory<{item_index}>)
         ]
 
         check_status() [
             <if>(hp >= 80 && hp <= 100) [
-                <printf>^("Trang thai: Rat khoe/n")
+                <printf>^("Trang thai: Rat khoe\n")
             ]
             <elif>(hp >= 30 %% hp < 80) [
-                <printf>^("Trang thai: Binh thuong/n")
+                <printf>^("Trang thai: Binh thuong\n")
             ]
             <else> [
-                <printf>^("Trang thai: Nguy hiem!/n")
+                <printf>^("Trang thai: Nguy hiem!\n")
             ]
             <return>(hp)
         ]
@@ -89,23 +89,22 @@ Hero !class [
     
     | Thử nghiệm hàm safe_divide với phép chia cho 0 |
     int(~safe_divide(100, 0))~calc_test
-    <printf>^("Kết quả kiểm tra chia an toàn: {calc_test}/n")
+    <printf>^("Kết quả kiểm tra chia an toàn: {calc_test}\n")
 
     | Vòng lặp đếm i từ 1 đến 5 (Xử lý bởi Loop.cpp Subsystem) |
     **Loop** <for>(~i=1(2)&=5) [
-        <printf>^("--- Turn {i} ---/n")
+        <printf>^("--- Turn {i} ---\n")
         string($p1~use_random_item())~used_item
     ]
     
     int($p1~check_status())~current_hp
     int(~calculate_crit_damage(50, 10))~final_strike
-    <printf>^("Sát thương chí mạng tính toán được: {final_strike}/n")
+    <printf>^("Sát thương chí mạng tính toán được: {final_strike}\n")
 
     | Thao tác bộ nhớ trực tiếp và giải phóng vùng nhớ |
     int(999)~temp_data
-    <printf>^("Địa chỉ ô nhớ temp_data: {<memory>^temp_data}/n")
     <memory>dete(temp_data)
 ]
 <catch>(`GlobalError`) [
-    <printf>^("Bắt lỗi ngoại lệ toàn cục tại dòng {error<"line">}: {error<"code">}/n")
+    <printf>^("Bắt lỗi ngoại lệ toàn cục tại dòng {error<"line">}: {error<"code">}\n")
 ]

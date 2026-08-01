@@ -8,7 +8,6 @@ import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
-print("hello")
 
 class KoCompileError(Exception):
     def __init__(self, message: str, line: int = 0, column: int = 0):
@@ -98,7 +97,7 @@ class KoLexer:
         self.line = 1
         self.column = 1
         self.tokens: List[Token] = []
-        self.quote_stack = []
+        self.quote_stack = []  # Stack of (quote_char, brace_depth) tuples
 
     def _error(self, message: str):
         raise KoCompileError(message, self.line, self.column)
@@ -156,10 +155,21 @@ class KoLexer:
                 self._advance(); self._advance()
                 continue
             
-            if self.quote_stack and char == "}":
-                self.tokens.append(Token(TokenType.RBRACE, "}", self.line, self.column))
+            if self.quote_stack and char == "{":
+                self.quote_stack[-1] = (self.quote_stack[-1][0], self.quote_stack[-1][1] + 1)
+                self.tokens.append(Token(TokenType.LBRACE, "{", self.line, self.column))
                 self._advance()
-                self._tokenize_string_fragment(self.quote_stack.pop())
+                continue
+
+            if self.quote_stack and char == "}":
+                if self.quote_stack[-1][1] > 1:
+                    self.quote_stack[-1] = (self.quote_stack[-1][0], self.quote_stack[-1][1] - 1)
+                    self.tokens.append(Token(TokenType.RBRACE, "}", self.line, self.column))
+                    self._advance()
+                else:
+                    self.tokens.append(Token(TokenType.RBRACE, "}", self.line, self.column))
+                    self._advance()
+                    self._tokenize_string_fragment(self.quote_stack.pop()[0], continuation=True)
                 continue
 
             if char == "|":
@@ -318,31 +328,54 @@ class KoLexer:
         self.tokens.append(Token(TokenType.EOF, None, self.line, self.column))
         return self.tokens
 
-    def _tokenize_string_fragment(self, quote: str):
+    def _tokenize_string_fragment(self, quote: str, continuation: bool = False):
         start_col = self.column
         content = ""
+        brace_depth = 0
         while self._peek() and self._peek() != quote:
-            if self._peek() == "{":
+            if self._peek() == "{" and brace_depth == 0:
                 if content:
                     self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
                 self.tokens.append(Token(TokenType.LBRACE, "{", self.line, self.column))
                 self._advance()
-                self.quote_stack.append(quote)
+                self.quote_stack.append((quote, 1))
                 return
-            
-            if self._peek() == "/":
-                if self._peek(1) == "n":
+            elif self._peek() == "{":
+                brace_depth += 1
+                content += self._advance()
+            elif self._peek() == "}" and brace_depth == 0:
+                if continuation:
+                    if content:
+                        self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
+                    self.tokens.append(Token(TokenType.RBRACE, "}", self.line, self.column))
                     self._advance()
-                    self._advance()
-                    content += "\n"
+                    start_col = self.column
+                    continue
                 else:
                     content += self._advance()
+            elif self._peek() == "}" and brace_depth > 0:
+                brace_depth -= 1
+                content += self._advance()
+            elif self._peek() == ">" and brace_depth == 0:
+                content += self._advance()
             elif self._peek() == "\\":
                 self._advance()
-                content += self._advance()
+                next_char = self._advance()
+                if next_char == "n":
+                    content += "\n"
+                elif next_char == "t":
+                    content += "\t"
+                elif next_char == "r":
+                    content += "\r"
+                elif next_char == "\\":
+                    content += "\\"
+                elif next_char == '"':
+                    content += '"'
+                else:
+                    content += "\\" + next_char
             else:
                 content += self._advance()
-        
+
         if self._peek() == quote:
             self._advance()
             self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
@@ -357,7 +390,7 @@ class Node:
 class Expr(Node):
     pass
 
-@dataclass
+@dataclass(frozen=True)
 class Literal(Expr):
     value: Any
 
@@ -651,6 +684,10 @@ class KoParser:
             return self.parse_call_or_instantiation()
         elif self._check(TokenType.DOLLAR):
             return self.parse_call_or_instantiation()
+        elif self._check(TokenType.LANGLE):
+            return self.parse_system_tag_statement()
+        elif self._check(TokenType.LPAREN):
+            return self.parse_tuple_decl()
         elif self._check(TokenType.ID):
             if self._peek(1).type == TokenType.LPAREN:
                 return self._parse_id_lparen_statement()
@@ -658,6 +695,57 @@ class KoParser:
                 return self.parse_function()
         
         self._error(f"Unexpected statement: {self._peek().type}")
+
+    def parse_system_tag_statement(self) -> Stmt:
+        # Handle system tag calls at statement level: <$module>(args)[~var|@target]
+        self._consume(TokenType.LANGLE, "Expected <")
+        self._consume(TokenType.DOLLAR, "Expected $")
+        module_name = self._consume(TokenType.ID, "Expected module name").value
+        self._consume(TokenType.RANGLE, "Expected >")
+
+        func_name = None
+        if self._check(TokenType.ID):
+            func_name = self._advance().value
+
+        self._match(TokenType.CARET)  # Consume ^ if present
+
+        args = []
+        if self._match(TokenType.LPAREN):
+            if not self._check(TokenType.RPAREN):
+                while True:
+                    args.append(self.parse_expression(stop_tokens=[TokenType.RPAREN, TokenType.COMMA]))
+                    if not self._match(TokenType.COMMA):
+                        break
+            self._consume(TokenType.RPAREN, "Expected )")
+
+        full_name = f"{module_name}.{func_name}" if func_name else module_name
+
+        # Check for ~var (assignment) or @target (target assignment)
+        if self._match(TokenType.TILDE):
+            var_name = self._consume(TokenType.ID, "Expected variable name").value
+            return Assignment(Identifier(var_name), Call(full_name, args))
+        elif self._check(TokenType.ID) and self._peek().value.startswith("@"):
+            target = self._advance().value[1:]
+            return Call(full_name, args, target=target)
+
+        # Just a call expression as statement
+        return Call(full_name, args)
+
+    def parse_tuple_decl(self) -> VarDecl:
+        # Handle tuple/array declarations at statement level: (expr, expr)~name
+        self._consume(TokenType.LPAREN, "Expected (")
+        elements = []
+        if not self._check(TokenType.RPAREN):
+            while True:
+                elements.append(self.parse_expression(stop_tokens=[TokenType.RPAREN, TokenType.COMMA]))
+                if not self._match(TokenType.COMMA):
+                    break
+        self._consume(TokenType.RPAREN, "Expected )")
+        self._consume(TokenType.TILDE, "Expected ~")
+        name = self._consume(TokenType.ID, "Expected variable name").value
+        # Build a TupleLiteral as the initializer
+        initializer = TupleLiteral(elements) if len(elements) > 1 else elements[0] if elements else Literal(None)
+        return VarDecl("", initializer, name)
 
     def _parse_id_lparen_statement(self) -> Stmt:
         # Check if it's a function decl or var decl
@@ -892,6 +980,12 @@ class KoParser:
                         break
                 self._consume(TokenType.RANGLE, "Expected >")
                 expr = Indexing(expr, indices)
+            elif next_token.type == TokenType.LBRACE and next_token.line == self.tokens[self.pos-1].line and next_token.column == self.tokens[self.pos-1].column + len(str(self.tokens[self.pos-1].value)):
+                # key{value} dictionary literal suffix
+                self._advance()
+                value = self.parse_expression(stop_tokens=[TokenType.RBRACE])
+                self._consume(TokenType.RBRACE, "Expected }")
+                expr = DictLiteral({expr: value})
             elif self._match(TokenType.DOLLAR):
                 # $instance~method(args)
                 method_name = self._consume(TokenType.ID, "Expected method name").value
@@ -949,14 +1043,15 @@ class KoParser:
                     elements.append(self.parse_expression(stop_tokens=[TokenType.RPAREN]))
                     if not self._match(TokenType.COMMA):
                         break
+            if len(elements) == 1 and self._check(TokenType.LBRACE):
+                key = elements[0]
+                self._advance()
+                value = self.parse_expression(stop_tokens=[TokenType.RBRACE])
+                self._consume(TokenType.RBRACE, "Expected }")
+                self._consume(TokenType.RPAREN, "Expected )")
+                return DictLiteral({key: value})
             self._consume(TokenType.RPAREN, "Expected )")
             if len(elements) == 1:
-                if self._check(TokenType.LBRACE):
-                    key = elements[0]
-                    self._consume(TokenType.LBRACE, "Expected {")
-                    value = self.parse_expression(stop_tokens=[TokenType.RPAREN])
-                    self._consume(TokenType.RBRACE, "Expected }")
-                    return DictLiteral({key: value})
                 if self._peek().type == TokenType.TILDE:
                     return TupleLiteral(elements)
                 return elements[0]
@@ -1025,7 +1120,7 @@ class KoParser:
                 self._consume(TokenType.LPAREN, "Expected (")
                 target = self._consume(TokenType.ID, "Expected identifier").value
                 self._consume(TokenType.RPAREN, "Expected )")
-                return Call("memory_free", [Identifier(target)])
+                return Call("memory_free", [Identifier(target)], target=target)
         
         self._error("Invalid memory operation")
 
@@ -1046,9 +1141,8 @@ class KoParser:
             while not self._check(TokenType.RPAREN):
                 token = self._advance()
                 if token.type == TokenType.LBRACE:
-                    if current_text:
-                        parts.append(Literal(current_text))
-                        current_text = ""
+                    parts.append(Literal(current_text))
+                    current_text = ""
                     expr = self.parse_expression(stop_tokens=[TokenType.RBRACE])
                     self._consume(TokenType.RBRACE, "Expected }")
                     exprs.append(expr)
@@ -1057,8 +1151,7 @@ class KoParser:
                 elif token.type == TokenType.RPAREN:
                     break
                 else:
-                    if token.value:
-                        current_text += str(token.value)
+                    self._error(f"Unexpected token '{token.type}' in printf format string. String literals must be enclosed in quotes, and escape sequences like /n must be inside quotes")
             
             if current_text:
                 parts.append(Literal(current_text))
@@ -1093,7 +1186,10 @@ class KoParser:
             else:
                 target = self._consume(TokenType.ID, "Expected target variable").value
                 return Assignment(Identifier(target), Call("input", [prompt]))
-        
+
+        if isinstance(prompt, Identifier):
+            return Assignment(prompt, Call("input", [prompt]))
+
         return Call("input", [prompt])
 
     def parse_return(self) -> Stmt:
@@ -1480,7 +1576,9 @@ class KoCodeGenerator:
             self._write("pass")
         else:
             for stmt in node.body:
-                self.visit(stmt)
+                result = self.visit(stmt)
+                if result is not None and result:
+                    self._write(result)
         self.indent_level -= 1
 
     def visit_WhileLoop(self, node: WhileLoop):
@@ -1492,7 +1590,9 @@ class KoCodeGenerator:
             self._write("pass")
         else:
             for stmt in node.body:
-                self.visit(stmt)
+                result = self.visit(stmt)
+                if result is not None and result:
+                    self._write(result)
         self.indent_level -= 1
 
     def visit_CatchStmt(self, node: CatchStmt):
@@ -1549,14 +1649,17 @@ class KoCodeGenerator:
             parts = node.args[0].value if node.args and isinstance(node.args[0], Literal) and isinstance(node.args[0].value, list) else []
             exprs = [self.visit(arg) for arg in node.args[1:]]
             format_parts = []
-            part_idx = 0
-            for part in parts:
-                if isinstance(part, str):
-                    format_parts.append(part)
+            for i, part in enumerate(parts):
+                if isinstance(part, Literal) and isinstance(part.value, str):
+                    val = part.value.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r").replace('"', '\\"')
+                    format_parts.append(val)
+                elif isinstance(part, str):
+                    val = part.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r").replace('"', '\\"')
+                    format_parts.append(val)
                 else:
-                    if part_idx < len(exprs):
-                        format_parts.append(f"{{{exprs[part_idx]}}}")
-                        part_idx += 1
+                    format_parts.append(str(part))
+                if i < len(exprs):
+                    format_parts.append(f"{{{exprs[i]}}}")
             call_code = f'print(f"{"".join(format_parts)}")'
         elif node.name == "print":
             call_code = f"print({args})"
@@ -1651,7 +1754,11 @@ class KoInterpreter:
     def visit_MainBlock(self, node: MainBlock):
         self.push_scope()
         for stmt in node.body:
-            self.visit(stmt)
+            try:
+                self.visit(stmt)
+            except ReturnException as e:
+                self.pop_scope()
+                return e.value
         self.pop_scope()
 
     def visit_ClassDecl(self, node: ClassDecl):
@@ -1754,18 +1861,34 @@ class KoInterpreter:
         elif node.name == "memory_addr":
             return id(args[0]) if args else None
         elif node.name == "memory_free":
+            var_name = node.target if node.target else None
+            if var_name:
+                try:
+                    self.set_var(var_name, None)
+                except NameError:
+                    pass
             return None
         elif node.name == "printf":
-            fmt_str = args[0] if args else ""
-            import re
-            def _replace_var(match):
-                var_name = match.group(1)
-                try:
-                    return str(self.get_var(var_name))
-                except NameError:
-                    return match.group(0)
-            result = re.sub(r'\{(\w+)\}', _replace_var, fmt_str)
-            print(result, end='')
+            parts = args[0] if args else []
+            exprs = args[1:]
+            if isinstance(parts, list):
+                format_parts = []
+                for i, part in enumerate(parts):
+                    if isinstance(part, Literal):
+                        if isinstance(part.value, str):
+                            format_parts.append(part.value)
+                        else:
+                            format_parts.append(str(part.value))
+                    elif isinstance(part, str):
+                        format_parts.append(part)
+                    else:
+                        format_parts.append(str(part))
+                    if i < len(exprs):
+                        format_parts.append(str(exprs[i]))
+                fmt_str = "".join(format_parts)
+            else:
+                fmt_str = str(parts)
+            print(fmt_str, end='')
         elif node.name == "input":
             return input(args[0] if args else "")
         elif node.name == "return":
@@ -1916,6 +2039,7 @@ class KoInterpreter:
         if node.op == TokenType.GT: return left > right
         if node.op == TokenType.GE: return left >= right
         if node.op == TokenType.LE: return left <= right
+        if node.op == TokenType.LANGLE: return left < right
         raise NotImplementedError(f"Op {node.op} not implemented")
 
     def visit_UnaryOp(self, node: UnaryOp):
@@ -1943,7 +2067,14 @@ def run_ko_source(source: str, file_name: str = "<stdin>") -> None:
     parser = KoParser(tokens)
     program = parser.parse()
     interpreter = KoInterpreter(program)
-    interpreter.run()
+    try:
+        interpreter.run()
+    except KoCompileError:
+        raise
+    except ReturnException as e:
+        pass
+    except Exception as exc:
+        raise KoCompileError(f"Runtime error: {exc}") from exc
 
 def _validate_source_security(source: str, file_name: str) -> None:
     import hashlib
@@ -1959,6 +2090,13 @@ def _validate_source_security(source: str, file_name: str) -> None:
             raise KoCompileError(f"Security violation: path traversal detected at line {i}", i, 0)
         if len(stripped) > 10000:
             raise KoCompileError(f"Line {i} exceeds maximum length of 10000 characters", i, 0)
+        if re.search(r'exec\s*\(|eval\s*\(|__import__\s*\(|subprocess|os\.system|shutil|pickle|shelve', stripped):
+            if not stripped.startswith("|"):
+                raise KoCompileError(f"Security violation: dangerous function call at line {i}", i, 0)
+        if re.search(r'<memory>dete\(', stripped):
+            pass
+        if re.search(r'import\s+os\b', stripped) and not stripped.startswith("#"):
+            raise KoCompileError(f"Security violation: direct os import at line {i}", i, 0)
 
 
 def run_ko_file(path: str) -> None:
