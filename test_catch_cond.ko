@@ -1,0 +1,6 @@
+[
+    int(10 / 0)~result
+    <catch>(`DivideByZeroError`) [
+        <printf>^("Caught divide by zero!\n")
+    ]
+]
