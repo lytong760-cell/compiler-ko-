@@ -1,0 +1,177 @@
+| ========================================================== |
+| Test Suite: .ko Language Specification Tests (v2.800)    |
+| Each section has expected output marked with EXPECT:      |
+| ========================================================== |
+
+| ---------------------------------------------------------- |
+| Section 1: Primitive Types                                |
+| ---------------------------------------------------------- |
+[
+    int(100)~hp
+    int(42)~mana
+    <printf>^("int: hp={hp}, mana={mana}\n")
+    freal(3.14159)~pi
+    freal(2.5)~damage
+    <printf>^("freal: pi={pi}, damage={damage}\n")
+    string("Hello .ko")~greeting
+    string("World")~world
+    <printf>^("string: {greeting} {world}\n")
+    booling(\True\)~is_active
+    booling(\False\)~is_dead
+    <printf>^("booling: is_active={is_active}, is_dead={is_dead}\n")
+]
+EXPECT:
+int: hp=100, mana=42
+freal: pi=3.14159, damage=2.5
+string: Hello .ko World
+booling: is_active=True, is_dead=False
+
+| ---------------------------------------------------------- |
+| Section 2: Arithmetic and Logical Operators              |
+| ---------------------------------------------------------- |
+[
+    int(10)~a
+    int(3)~b
+    int(a + b)~sum_val
+    int(a - b)~diff_val
+    int(a * b)~prod_val
+    int(a / b)~quot_val
+    int(a % b)~rem_val
+    <printf>^("Arithmetic: sum={sum_val}, diff={diff_val}, prod={prod_val}, quot={quot_val}, rem={rem_val}\n")
+    booling(\True\)~t1
+    booling(\False\)~f1
+    booling(t1 && f1)~and_result
+    booling(t1 %% f1)~or_result
+    <printf>^("Logical: and={and_result}, or_true={or_result}\n")
+    int(5)~x
+    int(10)~y
+    booling(x > y)~gt_result
+    booling(x < y)~lt_result
+    booling(x == y)~eq_result
+    <printf>^("Comparisons: gt={gt_result}, lt={lt_result}, eq={eq_result}\n")
+]
+EXPECT:
+Arithmetic: sum=13, diff=7, prod=30, quot=3, rem=1
+Logical: and=False, or_true=True
+Comparisons: gt=False, lt=True, eq=False
+
+| ---------------------------------------------------------- |
+| Section 3: Tuples and Indexing                           |
+| ---------------------------------------------------------- |
+[
+    (1, 2, 3)~numbers
+    <printf>^("Tuple: numbers<0>={numbers<0>}, numbers<1>={numbers<1>}, numbers<2>={numbers<2>}\n")
+    ('a', 'b', 'c')~letters
+    <printf>^("Letters: letters<0>={letters<0>}, letters<1>={letters<1>}, letters<2>={letters<2>}\n")
+]
+EXPECT:
+Tuple: numbers<0>=1, numbers<1>=2, numbers<2>=3
+Letters: letters<0>=a, letters<1>=b, letters<2>=c
+
+| ---------------------------------------------------------- |
+| Section 4: Dictionaries                                  |
+| ---------------------------------------------------------- |
+[
+    (1{'a'}, 2{'hp'}, 3{'mp'})~stats
+    <printf>^("Stats: a={stats{'a'}}, hp={stats{'hp'}}, mp={stats{'mp'}}\n")
+]
+EXPECT:
+Stats: a=1, hp=2, mp=3
+
+| ---------------------------------------------------------- |
+| Section 5: Functions                                      |
+| ---------------------------------------------------------- |
+calculate_sum(int~a, int~b) [
+    int(a + b)~result
+    <return>(result)
+]
+get_ten() [
+    <return>(10)
+]
+[
+    int(~calculate_sum(10, 20))~sum_result
+    <printf>^("Sum: {sum_result}\n")
+    int(~get_ten())~ten_val
+    <printf>^("get_ten: {ten_val}\n")
+]
+EXPECT:
+Sum: 30
+get_ten: 10
+
+| ---------------------------------------------------------- |
+| Section 6: Exception Handling (Global Upward Catching)   |
+| ---------------------------------------------------------- |
+<catch>(`DivideByZeroError`) [
+    <printf>^("Global catch: DivideByZeroError caught!\n")
+    <return>(0)
+]
+<catch>(`SystemException`) [
+    <printf>^("Global catch: SystemException caught!\n")
+    <return>(-1)
+]
+[
+    int(10 / 0)~result
+    <printf>^("Result: {result}\n")
+]
+EXPECT:
+Global catch: DivideByZeroError caught!
+Result: 0
+
+| ---------------------------------------------------------- |
+| Section 7: Classes and OOP                               |
+| ---------------------------------------------------------- |
+Character !class [
+    @private [
+        string("")~name
+        int(100)~hp
+
+        take_damage(int~dmg) [
+            int(hp - dmg)~new_hp
+            <now>(new_hp)>hp
+            <return>(hp)
+        ]
+
+        get_status() [
+            <return>(hp)
+        ]
+    ]
+]
+[
+    ~Character~hero
+    int($hero~take_damage(20))~hero_hp
+    int($hero~get_status())~hero_status
+    <printf>^("Hero HP: {hero_status}\n")
+]
+EXPECT:
+Hero HP: 80
+
+| ---------------------------------------------------------- |
+| Section 8: Control Flow (if/elif/else)                   |
+| ---------------------------------------------------------- |
+[
+    int(85)~hp
+    <if>(hp >= 80) [
+        <printf>^("HP={hp}: Rat khoe\n")
+    ]
+    <elif>(hp >= 30) [
+        <printf>^("HP={hp}: Binh thuong\n")
+    ]
+    <else> [
+        <printf>^("HP={hp}: Nguy hiem!\n")
+    ]
+]
+EXPECT:
+HP=85: Rat khoe
+
+| ---------------------------------------------------------- |
+| Section 9: Loops                                         |
+| ---------------------------------------------------------- |
+[
+    int(0)~sum
+    **Loop** <for>(~i=1&=3) [
+        int(sum + i)~sum
+    ]
+    <printf>^("Sum 1..3: {sum}\n")
+]
+EXPECT:
+Sum 1..3: 6

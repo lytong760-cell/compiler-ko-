@@ -1,0 +1,47 @@
+| ========================================================== |
+| Test: System Tags (<print>, <printf>, <input>, <memory>, <now>, <encode>) |
+| ========================================================== |
+[
+    | <print> tag |
+    <print>string^("Hello from <print> tag\n")
+
+    | <print> with trailing newline escape |
+    <print>string^(x"\n")
+
+    | <printf> with string interpolation |
+    int(42)~answer
+    <printf>^("The answer is {answer}\n")
+
+    | <printf> with multiple variables |
+    string("Ko")~lang
+    int(2800)~version
+    <printf>^("Language: {lang}, Version: {version}\n")
+
+    | <now> mutation |
+    int(0)~counter
+    <now>(100)>counter
+    <printf>^("Counter after <now>: {counter}\n")
+    <now>(counter + 50)>counter
+    <printf>^("Counter after increment: {counter}\n")
+
+    | <memory> address lookup |
+    int(999)~temp_var
+    <printf>^("Address of temp_var: {<memory>^temp_var}\n")
+
+    | <memory>dete - free memory |
+    <memory>dete(temp_var)
+    <printf>^("Memory freed for temp_var\n")
+
+    | <encode> ASCII |
+    <encode(`ASCII`)>^("Hello ASCII\n")
+
+    | <encode> UTF-8 |
+    <encode(`UTF-8`)>^("Hello UTF-8 .ko\n")
+
+    | <encode> UTF-16 |
+    <encode(`UTF-16`)>^("Hello UTF-16\n")
+
+    | Store encoded bytes in variable |
+    bytes(<encode(`UTF-8`)>^("Encoded data"))~encoded
+    <printf>^("Encoded bytes length: {len(encoded)}\n")
+]

@@ -274,8 +274,6 @@ class SemanticAnalyzer:
             self._analyze_class(stmt, ir_module)
         elif isinstance(stmt, Call):
             self._analyze_call(stmt, scope, ir_module)
-        elif isinstance(stmt, ImportStmt):
-            pass
         elif isinstance(stmt, CatchStmt):
             self._analyze_catch(stmt, ir_module)
 
@@ -346,9 +344,7 @@ class SemanticAnalyzer:
     def _analyze_expression(self, expr: object, scope: SemanticScope, ir_module: IRModule) -> None:
         from ko_compiler import Literal, Identifier, BinaryOp, UnaryOp, Call, Indexing, TupleLiteral, DictLiteral
 
-        if isinstance(expr, Literal):
-            pass
-        elif isinstance(expr, Identifier):
+        if isinstance(expr, Identifier):
             var_type = scope.lookup_var(expr.name)
             if var_type is None:
                 self._error(f"Undefined variable '{expr.name}'", 0)
@@ -412,12 +408,6 @@ class SemanticAnalyzer:
 
     def _validate_global_scope(self, program: object) -> None:
         from ko_compiler import VarDecl, Call
-
-        for stmt in (program.main.body if program.main else []):
-            if isinstance(stmt, VarDecl) and stmt.type_name:
-                pass
-            elif isinstance(stmt, Call):
-                pass
 
         for catch in program.catch_blocks:
             if isinstance(catch.error_condition, str):

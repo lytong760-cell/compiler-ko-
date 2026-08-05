@@ -1,4 +1,4 @@
-(1{'a': 10, 'b': 20})~dic
+(1{'a'}, 2{'b'})~dic
 [
-    <printf>^("dic{a} = {dic{a}}\n")
+    <printf>^("dic{a} = {dic{a}}, dic{b} = {dic{'b'}}\n")
 ]

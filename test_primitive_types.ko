@@ -1,0 +1,35 @@
+| ========================================================== |
+| Test: Primitive Data Types (int, freal, string, booling, byte, bytes) |
+| ========================================================== |
+[
+    | int type |
+    int(100)~hp
+    int(42)~mana
+    <printf>^("int: hp={hp}, mana={mana}\n")
+
+    | freal type |
+    freal(3.14159)~pi
+    freal(2.5)~damage
+    <printf>^("freal: pi={pi}, damage={damage}\n")
+
+    | string type |
+    string("Hello .ko\n")~greeting
+    string("World")~world
+    <printf>^("string: {greeting}")
+    <printf>^("string concat: {greeting}{world}\n")
+
+    | booling type |
+    booling(\True\)~is_active
+    booling(\False\)~is_dead
+    <printf>^("booling: is_active={is_active}, is_dead={is_dead}\n")
+
+    | byte type |
+    byte("A")~binary_char
+    byte(10)~b_num
+    <printf>^("byte: A={binary_char}, 10={b_num}\n")
+
+    | bytes type |
+    bytes(8)~hex_buffer
+    bytes("48656c6c6f")~hex_data
+    <printf>^("bytes: hex_buffer len={len(hex_buffer)}, hex_data={hex_data}\n")
+]

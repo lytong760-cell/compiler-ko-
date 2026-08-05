@@ -130,35 +130,6 @@ class DeadCodeEliminator:
             new_instructions.append(instr)
         bb.instructions = new_instructions
 
-    def remove_unused_variables(self, module: object) -> object:
-        used_vars: Set[str] = set()
-
-        for func in module.functions.values():
-            self._collect_used_vars_in_function(func, used_vars)
-        if module.main:
-            for bb in module.main:
-                self._collect_used_vars_in_block(bb, used_vars)
-
-        for name, var in module.global_vars.items():
-            if name not in used_vars and not name.startswith("_"):
-                var.defined = False
-                self.changes_made = True
-
-        return module
-
-    def _collect_used_vars_in_function(self, func: IRFunction, used: Set[str]) -> None:
-        for bb in func.body:
-            self._collect_used_vars_in_block(bb, used)
-
-    def _collect_used_vars_in_block(self, bb: IRBasicBlock, used: Set[str]) -> None:
-        from ir import IROpcode
-        for instr in bb.instructions:
-            if instr.opcode == IROpcode.LOAD_NAME:
-                used.add(str(instr.arg))
-            elif instr.opcode == IROpcode.CALL_FUNCTION:
-                used.add(str(instr.arg))
-
-
 class PeepholeOptimizer:
     def __init__(self) -> None:
         self.changes_made: bool = False

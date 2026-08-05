@@ -1,6 +1,6 @@
 ĐẶC TẢ KỸ THUẬT VÀ KIẾN TRÚC HÌNH THỨC NGÔN NGỮ LẬP TRÌNH .KO
 
-Phiên bản đặc tả (Specification Version):2.505
+Phiên bản đặc tả (Specification Version):2.800
 
 Phân loại ngôn ngữ: Đa mô hình (Multi-Paradigm: Imperative, Object-Oriented, Low-Level Memory Direct Manipulation, Structural Sequential Upward Exception Handling)
 
@@ -8,7 +8,7 @@ Tiêu chuẩn toán học & Lý thuyết ngôn ngữ: Formal Semantics, Abstract
 
 I. KIẾN TRÚC HẠT NHÂN VÀ THỰC THI CHUẨN HOÁ (RUNTIME ARCHITECTURE & ENGINE TARGET MAPPING)
 
-Ngôn ngữ .ko vận hành dựa trên mô hình thực thi lai (Hybrid Execution Target Engine). Trình biên dịch/phiên dịch trung tâm (compiler.py) chịu trách nhiệm phân tích cú pháp (Parsing), tạo cây cú pháp trừu tượng (AST), và phân giải ngữ nghĩa để ánh xạ các chỉ thị cấp cao tới các Subsystem thực thi chuyên biệt ở cấp thấp.
+Ngôn ngữ .ko vận hành dựa trên mô hình thực thi thông dịch (Interpreted Execution Model). Trình biên dịch/phiên dịch trung tâm (ko_compiler.py) chịu trách nhiệm phân tích cú pháp (Parsing), tạo cây cú pháp trừu tượng (AST), và thực thi trực tiếp cây AST thông qua KoInterpreter. Các thành phần phụ trợ bao gồm KoCodeGenerator (sinh mã Python), IRBuilder (xây dựng biểu diễn trung gian), Optimizer (tối ưu hóa), và SemanticAnalyzer (phân tích ngữ nghĩa) — hiện tại chỉ đóng vai trò tham khảo hoặc hỗ trợ phân tích tĩnh.
 
 1. Sơ đồ Cấu trúc Phân tầng Thực thi (Execution Pipeline Architecture)
 
@@ -28,8 +28,8 @@ $$\mathcal{P}: \text{SourceCode}_{.ko} \xrightarrow{\text{Lexer/Parser}} \text{A
                  /                                     \
                 v                                       v
    +--------------------------+           +----------------------------+
-   |   Subsystem Import Engine|           |    Subsystem Loop Engine   |
-   |      (Import.java)       |           |         (Loop.cpp)         |
+|   Subsystem Import Engine|           |    Subsystem Loop Engine   |
+|   (Python fallback)      |           |    (Python range() fallback)|
    +--------------------------+           +----------------------------+
    | - Dynamic Path Resolution|           | - Low-level Loop Unrolling |
    | - Scope Table Ingestion  |           | - Cache Line Optimization  |
@@ -44,9 +44,9 @@ Hệ thống Nạp Thư viện & Module (Import Subsystem Target):
 
 Từ khóa định danh: **Import**
 
-Thành phần thực thi cấp dưới: Import.java
+Thành phần thực thi cấp dưới: Python fallback (trong ko_compiler.py)
 
-Ngữ nghĩa vận hành (Semantics): Khi trình đóng ngắt gặp từ khóa **Import**, luồng điều khiển chuyển giao cho runtime Java Virtual Machine (JVM) subsystem Import.java. Subsystem này thực hiện:
+Ngữ nghĩa vận hành (Semantics): Khi trình đóng ngắt gặp từ khóa **Import**, luồng điều khiển chuyển giao cho Python-based module resolution subsystem trong ko_compiler.py. Subsystem này thực hiện:
 
 Phân giải đường dẫn tuyệt đối/tương đối (Dynamic Path Resolution).
 
@@ -58,9 +58,9 @@ Tải động (Dynamic Classloading) và chèn không gian tên vào Bảng Tầ
 
 Từ khóa định danh: **Loop**
 
-Thành phần thực thi cấp dưới: Loop.cpp
+Thành phần thực thi cấp dưới: Python range() fallback (trong ko_compiler.py)
 
-Ngữ nghĩa vận hành (Semantics): Mọi cấu trúc lặp bắt đầu bằng tiền tố **Loop** được trình biên dịch biên dịch thành mã máy/C++ native call do Loop.cpp quản lý:
+Ngữ nghĩa vận hành (Semantics): Mọi cấu trúc lặp bắt đầu bằng tiền tố **Loop** được trình thông dịch thực thi thông qua Python range() fallback:
 
 Quản lý trực tiếp thanh ghi đếm (Hardware Register Allocation).
 
@@ -153,7 +153,7 @@ Toán tử Logic (Logical Operators $\mathbb{O}_{logic}$):
 
 5. Tiên đề Tầm vực Thực thi Toàn cục (Global Scope Execution Constraint Axiom)
 
-Tiên đề: Mọi câu lệnh thực thi (Executable Statement) không được phép nằm tự do ở phạm vi Toàn cục (Global Scope). Tất cả câu lệnh thực thi bắt buộc phải đóng gói bên trong một Hàm (Function Scope) hoặc Khối Thực thi Chính (Main Entry Point Block [ ]). Phạm vi toàn cục chỉ chấp nhận các câu lệnh **Import**, khai báo Hàm và khai báo Lớp.
+Tiên đề: Mọi câu lệnh thực thi (Executable Statement) không được phép nằm tự do ở phạm vi Toàn cục (Global Scope). Tất cả câu lệnh thực thi bắt buộc phải đóng gói bên trong một Hàm (Function Scope) hoặc Khối Thực thi Chính (Main Entry Point Block [ ]). Phạm vi toàn cục chỉ chấp nhận các câu lệnh **Import**, khai báo Hàm, khai báo Lớp, và khai báo Tuple/Dictionary.
 
 III. HỆ THỐNG KIỂU DỮ LIỆU NGUYÊN THỦY VÀ CẤU TRÚC PHỨC HỢP
 
@@ -234,6 +234,10 @@ Danh sách Lồng nhau (Nested List Graph):
 Bảng Băm / Từ điển (Dictionary Key-Value Mapping):
 
 (1{'a'})~dic
+
+Cú pháp mở rộng với Key-Value trực tiếp trong ngoặc nhọn:
+
+{'name', 'Alice', 'hp', 100}~stats
 
 
 
@@ -400,7 +404,7 @@ Sử dụng bộ thẻ cấu trúc <if>, <elif>, và <else>:
 
 2. Hệ thống Vòng lặp (Loop Engine Target)
 
-Mọi vòng lặp bắt buộc sử dụng từ khóa Loop để kích hoạt subsystem Loop.cpp.
+Mọi vòng lặp được thực thi thông qua Python range() với giới hạn MAX_LOOP_ITERATIONS.
 
 A. Vòng lặp Đếm Số lần (<for> Loop)
 
@@ -434,7 +438,7 @@ B. Vòng lặp Điều kiện (while Loop)
 
 VII. MÔ-ĐUN NẠP VÀ HỆ THỐNG PHẠM VI (MODULE IMPORT & SCOPE SYSTEM)
 
-1. Cú pháp Nạp Mô-đun (Powered by Import.java)
+1. Cú pháp Nạp Mô-đun (Python Fallback)
 
 $$\text{\textbf{Import}}(\$\text{ModuleName})\text{@also}\%\sim\text{Alias}!`\text{ScopeTag}`:\text{Alias}$$
 
@@ -628,7 +632,7 @@ error<"type">: Tên định danh chuẩn của ngoại lệ (DivideByZeroError, 
 X. CHƯƠNG TRÌNH MẪU HOÀN CHỈNH (COMPLETE SYSTEM DEMO PROGRAM)
 
 | ========================================================== |
-| 1. Nạp Thư viện Chuẩn (Xử lý bởi Import.java Subsystem)    |
+| 1. Nạp Thư viện Chuẩn (Python Fallback trong ko_compiler.py) |
 | ========================================================== |
 **Import**($Random)@also%~random!`global`:random
 **Import**($Os)@also%~os!`global`:os
@@ -720,7 +724,7 @@ Hero !class [
     int(~safe_divide(100, 0))~calc_test
     <printf>^("Kết quả kiểm tra chia an toàn: {calc_test}")
 
-    | Vòng lặp đếm i từ 1 đến 5 (Xử lý bởi Loop.cpp Subsystem) |
+    | Vòng lặp đếm i từ 1 đến 5 (Python range() fallback) |
     **Loop** <for>(~i=1(2)&=5) [
         <printf>^("--- Turn {i} ---")
         string($p1~use_random_item())~used_item

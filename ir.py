@@ -239,12 +239,6 @@ class IRBuilder:
         return self.module
 
 
-def build_ir_from_ast(program: Any) -> IRModule:
-    builder = IRBuilder()
-    builder.build(program)
-    return builder.module
-
-
 def ir_to_string(module: IRModule) -> str:
     lines: List[str] = []
     lines.append("=== IR Module ===")

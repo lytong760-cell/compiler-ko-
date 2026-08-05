@@ -1,0 +1,18 @@
+| ========================================================== |
+| Test: web.domain and print escape sequences |
+| ========================================================== |
+**Import**($Website)@also%~web!`global`:web
+
+| ========================================================== |
+| Test: <print> with x"\n" escape |
+| ========================================================== |
+[
+    | <print>string^(x"\n") - trailing string escape |
+    <print>string^(x"\n")
+
+    | <print>string^("Test with newline\n") |
+    <print>string^("Test with newline\n")
+
+    | <print> with x"\n" after content |
+    <print>string^(x"\n")
+]
