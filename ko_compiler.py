@@ -196,7 +196,13 @@ class KoLexer:
                 while temp_pos < len(self.source) and not self.source[temp_pos].isspace() and self.source[temp_pos] not in "()^":
                     temp_text += self.source[temp_pos]
                     temp_pos += 1
-                    if self.source[temp_pos-1] == ">": break
+                    if self.source[temp_pos-1] == ">":
+                        # Check for @also suffix on compound tokens like <for.f.whle>@also
+                        remaining = self.source[temp_pos:].lstrip()
+                        if remaining.startswith("@also"):
+                            temp_text += "@also"
+                            temp_pos += len("@also")
+                        break
                 
                 tag_map = {
                     "<if>": TokenType.IF,
@@ -515,6 +521,7 @@ class KoParser:
     def __init__(self, tokens: List[Token]):
         self.tokens = tokens
         self.pos = 0
+        self._dict_literal_depth = 0
 
     def _error(self, message: str):
         token = self._peek()
@@ -659,7 +666,7 @@ class KoParser:
             error_code = self._consume(TokenType.ID, "Expected error code").value
             self._consume(TokenType.BACKTICK, "Expected `")
             self._consume(TokenType.RPAREN, "Expected )")
-            condition = error_code
+            condition = f"`{error_code}`"
         else:
             condition = self.parse_expression(stop_tokens=[TokenType.RPAREN])
             self._consume(TokenType.RPAREN, "Expected )")
@@ -1032,9 +1039,16 @@ class KoParser:
             elif next_token.type == TokenType.LBRACE and (stop_tokens is None or TokenType.LBRACE not in stop_tokens) and next_token.line == self.tokens[self.pos-1].line and next_token.column == self.tokens[self.pos-1].column + len(str(self.tokens[self.pos-1].value)):
                 # Dictionary key access: expr{key}
                 self._advance()
-                key = self.parse_expression(stop_tokens=[TokenType.RBRACE])
+                self._dict_literal_depth += 1
+                try:
+                    key = self.parse_expression(stop_tokens=[TokenType.RBRACE])
+                finally:
+                    self._dict_literal_depth -= 1
                 self._consume(TokenType.RBRACE, "Expected }")
-                expr = Indexing(expr, [key])
+                if isinstance(expr, Literal) and self._dict_literal_depth == 0:
+                    expr = DictLiteral({expr: key})
+                else:
+                    expr = Indexing(expr, [key])
             elif self._match(TokenType.DOLLAR):
                 # $instance~method(args)
                 method_name = self._consume(TokenType.ID, "Expected method name").value
@@ -1063,6 +1077,17 @@ class KoParser:
                     expr = Call(method_name, args, is_instance_method=True, instance=expr.name if isinstance(expr, Identifier) else None)
                 else:
                     break
+            elif next_token.type == TokenType.LPAREN and (stop_tokens is None or TokenType.LPAREN not in stop_tokens):
+                self._advance()
+                # Function call: expr(args)
+                args = []
+                if not self._check(TokenType.RPAREN):
+                    while True:
+                        args.append(self.parse_expression(stop_tokens=[TokenType.RPAREN, TokenType.COMMA]))
+                        if not self._match(TokenType.COMMA):
+                            break
+                self._consume(TokenType.RPAREN, "Expected )")
+                expr = Call(expr.name if isinstance(expr, Identifier) else str(expr), args)
             else:
                 break
         return expr
@@ -1083,7 +1108,8 @@ class KoParser:
         if self._check(TokenType.DOLLAR):
             return self.parse_dollar_reference(stop_tokens)
 
-        if self._match(TokenType.LBRACE):
+        if self._check(TokenType.LBRACE):
+            self._advance()
             if self._check(TokenType.COLON):
                 self._advance()
                 value = self.parse_expression(stop_tokens=[TokenType.RBRACE])
@@ -1340,6 +1366,9 @@ class KoInterpreter:
             elif isinstance(decl, ClassDecl):
                 self.visit(decl)
         
+        for imp in self.program.imports:
+            self.visit(imp)
+        
         if self.program.main:
             self.visit(self.program.main)
     
@@ -1390,7 +1419,13 @@ class KoInterpreter:
         return catch_blocks
 
     def _handle_catch_in_scope(self, error_type, exc, catch_blocks):
-        for catch in catch_blocks:
+        # Combine statically collected catch blocks with dynamically registered ones
+        all_catch_blocks = list(catch_blocks)
+        scope = self.scopes[-1]
+        dynamic_catch_blocks = scope.get("_catch_blocks", [])
+        all_catch_blocks.extend(dynamic_catch_blocks)
+        
+        for catch in all_catch_blocks:
             if isinstance(catch.error_condition, str):
                 error_code = catch.error_condition.strip("`")
                 if error_code == error_type:
@@ -1462,12 +1497,41 @@ class KoInterpreter:
         new_class = type(class_name, (object,), {**bound_methods, '__init__': constructor})
         self.classes[class_name] = new_class
 
+    def visit_FuncDecl(self, node: FuncDecl) -> None:
+        # Register function for global lookup and local access
+        self.functions[node.name] = node
+        # Also store in current scope to support nested/local function declarations
+        self.set_var(node.name, node)
+
     def visit_CatchStmt(self, node: CatchStmt):
-        pass
+        # Register catch block with current scope for dynamic exception handling
+        # This allows catch blocks inside control flow (if/for/while) to be active
+        scope = self.scopes[-1]
+        if "_catch_blocks" not in scope:
+            scope["_catch_blocks"] = []
+        scope["_catch_blocks"].append(node)
+
+    def visit_ImportStmt(self, node: ImportStmt) -> None:
+        import subprocess
+        import json
+        import tempfile
+        try:
+            compiler_dir = os.path.dirname(os.path.abspath(__file__))
+            result = subprocess.run(
+                ["java", "-cp", compiler_dir, "Import",
+                 node.module_name, node.alias, node.scope_tag],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                module_info = json.loads(result.stdout.strip())
+                self.set_var(node.alias, module_info)
+            else:
+                raise KoCompileError(f"Import.java failed: {result.stderr.strip()}")
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
+            self.set_var(node.alias, {"module": node.module_name, "alias": node.alias, "scopeTag": node.scope_tag})
 
     def visit_WhileLoop(self, node: WhileLoop):
-        max_iterations = 100000
-        for _ in range(max_iterations):
+        for _ in range(MAX_LOOP_ITERATIONS):
             if not self.visit(node.condition):
                 break
             self._loop_iterations += 1
@@ -1491,14 +1555,14 @@ class KoInterpreter:
         start = self.visit(node.start)
         end = self.visit(node.end)
         step = self.visit(node.step) if node.step else 1
-        
+
         if step == 0:
             raise KoCompileError("Loop step cannot be zero")
-        
+
         total_iterations = max(0, (end - start) // step + 1) if (step > 0 and start <= end) or (step < 0 and start >= end) else 0
         if total_iterations > MAX_LOOP_ITERATIONS:
             raise KoCompileError(f"Loop iteration count ({total_iterations}) exceeds maximum ({MAX_LOOP_ITERATIONS})")
-        
+
         for i in range(start, end + 1, step):
             self._loop_iterations += 1
             if self._loop_iterations > MAX_LOOP_ITERATIONS:
@@ -1509,188 +1573,293 @@ class KoInterpreter:
 
     def visit_Call(self, node: Call):
         args = [self.visit(arg) for arg in node.args]
-        
-        if node.name == "print":
-            if len(args) == 2 and isinstance(node.args[1], Literal) and isinstance(node.args[1].value, str):
-                print(str(args[0]) + args[1])
-            else:
-                print(*args)
-        elif node.name == "memory_addr":
-            return id(args[0]) if args else None
-        elif node.name == "memory_free":
-            var_name = node.target if node.target else None
-            if var_name:
-                try:
-                    self.set_var(var_name, None)
-                except NameError:
-                    pass
-            return None
-        elif node.name == "printf":
-            parts = args[0] if args else []
-            exprs = args[1:]
-            if isinstance(parts, list):
-                format_parts = []
-                for i, part in enumerate(parts):
-                    if isinstance(part, Literal):
-                        if isinstance(part.value, str):
-                            format_parts.append(part.value)
-                        else:
-                            format_parts.append(str(part.value))
-                    elif isinstance(part, str):
-                        format_parts.append(part)
-                    else:
-                        format_parts.append(str(part))
-                    if i < len(exprs):
-                        format_parts.append(str(exprs[i]))
-                fmt_str = "".join(format_parts)
-            else:
-                fmt_str = str(parts)
-            print(fmt_str, end='')
-        elif node.name == "input":
-            return input(args[0] if args else "")
-        elif node.name == "return":
-            raise ReturnException(args[0] if args else None)
-        elif node.name == "random":
-            import random as _random
-            return _random.randint(args[0], args[1])
-        elif node.name == "os":
-            import os as _os
-            if len(args) == 1:
-                try:
-                    f = open(args[0], "r")
-                    content = f.read()
-                    f.close()
-                    return content
-                except FileNotFoundError:
-                    return ""
-            return ""
-        elif node.name == "web":
-            return ""
-        elif node.name == "domain":
-            return args[0] if args else ""
-        elif node.name == "web.domain":
-            return args[0] if args else ""
-        elif node.name == "web.fetch":
-            import urllib.request
-            if args:
-                try:
-                    response = urllib.request.urlopen(args[0])
-                    return response.read().decode('utf-8')
-                except Exception:
-                    return ""
-            return ""
-        elif node.name == "web.status":
-            import urllib.request
-            if args:
-                try:
-                    response = urllib.request.urlopen(args[0])
-                    return response.read().decode('utf-8')
-                except Exception:
-                    return ""
-            return ""
-        elif node.name == "os.read_file":
-            if args:
-                try:
-                    with open(args[0], 'r') as f:
-                        return f.read()
-                except FileNotFoundError:
-                    return ""
-            return ""
-        elif node.name == "os.write_file":
-            if len(args) >= 2:
-                try:
-                    with open(args[0], 'w') as f:
-                        f.write(args[1])
-                    return True
-                except Exception:
-                    return False
-            return False
-        elif node.name == "os.list_dir":
-            import os
-            if args:
-                try:
-                    return os.listdir(args[0])
-                except Exception:
-                    return []
-            return []
-        elif node.name == "random.random_int":
-            import random
-            if len(args) >= 2:
-                return random.randint(args[0], args[1])
-            return 0
-        elif node.name == "byte":
-            return to_byte(args[0]) if args else None
-        elif node.name == "bytes":
-            if len(args) == 1:
-                val = args[0]
-                if isinstance(val, str):
-                    try:
-                        int(val, 16)
-                        return bytes.fromhex(val)
-                    except ValueError:
-                        return int(val) * b'\x00'
-                return b'\x00' * int(val)
-            return bytes(args[0])
-        elif node.name == "encode":
-            if len(args) >= 2:
-                encoding_map = {"ASCII": "ascii", "UTF-8": "utf-8", "UTF-16": "utf-16"}
-                encoding = encoding_map.get(str(args[1]).strip("'\""), "utf-8")
-                return str(args[0]).encode(encoding)
-            return str(args[0]).encode('utf-8')
-        else:
-            # Custom function call or instance method call
-            self._recursion_depth += 1
-            if self._recursion_depth > MAX_RECURSION_DEPTH:
-                self._recursion_depth -= 1
-                raise KoCompileError(f"Maximum recursion depth ({MAX_RECURSION_DEPTH}) exceeded")
+        handler = self._call_handlers.get(node.name)
+        if handler is not None:
+            return handler(self, args, node)
+        module_info = None
+        if isinstance(node.name, str):
             try:
-                if node.name in self.functions:
-                    func = self.functions[node.name]
-                    self.push_scope()
-                    for i, param in enumerate(func.params):
-                        self.set_var(param.name, args[i])
-                    
-                    func_catch_blocks = self._collect_catch_blocks(func.body)
-                    
-                    try:
-                        for stmt in func.body:
-                            try:
-                                self.visit(stmt)
-                            except ReturnException as e:
-                                self.pop_scope()
-                                self._recursion_depth -= 1
-                                return e.value
-                            except KeyNotFoundError as exc:
-                                self._handle_catch_in_scope("KeyNotFoundError", exc, func_catch_blocks)
-                            except Exception as exc:
-                                error_type = type(exc).__name__
-                                mapped = self._map_python_error(error_type)
-                                self._handle_catch_in_scope(mapped, exc, func_catch_blocks)
-                    except ReturnException as e:
-                        self.pop_scope()
-                        self._recursion_depth -= 1
-                        return e.value
+                module_info = self.get_var(node.name)
+            except NameError:
+                pass
+        if isinstance(module_info, dict) and "module" in module_info:
+            module_name = module_info["module"]
+            handler = self._call_handlers.get(module_name)
+            if handler is None:
+                handler = self._call_handlers.get(module_name.lower())
+            if handler is not None:
+                return handler(self, args, node)
+        self._recursion_depth += 1
+        if self._recursion_depth > MAX_RECURSION_DEPTH:
+            self._recursion_depth -= 1
+            raise KoCompileError(f"Maximum recursion depth ({MAX_RECURSION_DEPTH}) exceeded")
+        try:
+            if node.name in self.functions:
+                func = self.functions[node.name]
+                self.push_scope()
+                for i, param in enumerate(func.params):
+                    self.set_var(param.name, args[i])
+                func_catch_blocks = self._collect_catch_blocks(func.body)
+                try:
+                    for stmt in func.body:
+                        try:
+                            self.visit(stmt)
+                        except ReturnException as e:
+                            self.pop_scope()
+                            self._recursion_depth -= 1
+                            return e.value
+                        except KeyNotFoundError as exc:
+                            self._handle_catch_in_scope("KeyNotFoundError", exc, func_catch_blocks)
+                        except Exception as exc:
+                            error_type = type(exc).__name__
+                            mapped = self._map_python_error(error_type)
+                            self._handle_catch_in_scope(mapped, exc, func_catch_blocks)
+                except ReturnException as e:
                     self.pop_scope()
                     self._recursion_depth -= 1
-                    return None
-                elif node.is_instance_method and node.instance:
-                    if node.instance in self.scopes[-1]:
-                        obj = self.get_var(node.instance)
-                        if isinstance(obj, dict) and "__class__" in obj:
-                            class_name = obj["__class__"]
-                            if class_name in self.classes:
-                                cls = self.classes[class_name]
-                                if hasattr(cls, node.name):
-                                    return getattr(cls, node.name)(obj, *args)
-                        elif hasattr(obj, node.name):
-                            return getattr(obj, node.name)(obj, *args)
-                    return None
-                else:
-                    self._recursion_depth -= 1
-                    raise NameError(f"Function {node.name} not defined")
-            except KoCompileError:
+                    return e.value
+                self.pop_scope()
                 self._recursion_depth -= 1
-                raise
+                return None
+            elif node.is_instance_method and node.instance:
+                try:
+                    obj = self.get_var(node.instance)
+                except NameError:
+                    return None
+                if isinstance(obj, dict) and "__class__" in obj:
+                    class_name = obj["__class__"]
+                    if class_name in self.classes:
+                        cls = self.classes[class_name]
+                        if hasattr(cls, node.name):
+                            return getattr(cls, node.name)(obj, *args)
+                elif hasattr(obj, node.name):
+                    return getattr(obj, node.name)(obj, *args)
+                return None
+            else:
+                self._recursion_depth -= 1
+                raise NameError(f"Function {node.name} not defined")
+        except KoCompileError:
+            self._recursion_depth -= 1
+            raise
+
+    @staticmethod
+    def _handle_print(ko_self, args, node):
+        if len(args) == 2 and isinstance(node.args[1], Literal) and isinstance(node.args[1].value, str):
+            print(str(args[0]) + args[1])
+        else:
+            print(*args)
+
+    @staticmethod
+    def _handle_memory_addr(ko_self, args, node):
+        return id(args[0]) if args else None
+
+    @staticmethod
+    def _handle_memory_free(ko_self, args, node):
+        var_name = node.target if node.target else None
+        if var_name:
+            try:
+                ko_self.set_var(var_name, None)
+            except NameError:
+                pass
+        return None
+
+    @staticmethod
+    def _handle_printf(ko_self, args, node):
+        parts = args[0] if args else []
+        exprs = args[1:]
+        if isinstance(parts, list):
+            format_parts = []
+            for i, part in enumerate(parts):
+                if isinstance(part, Literal):
+                    if isinstance(part.value, str):
+                        format_parts.append(part.value)
+                    else:
+                        format_parts.append(str(part.value))
+                elif isinstance(part, str):
+                    format_parts.append(part)
+                else:
+                    format_parts.append(str(part))
+                if i < len(exprs):
+                    format_parts.append(str(exprs[i]))
+            fmt_str = "".join(format_parts)
+        else:
+            fmt_str = str(parts)
+        print(fmt_str, end='')
+
+    @staticmethod
+    def _handle_input(ko_self, args, node):
+        return input(args[0] if args else "")
+
+    @staticmethod
+    def _handle_return(ko_self, args, node):
+        raise ReturnException(args[0] if args else None)
+
+    @staticmethod
+    def _handle_random(ko_self, args, node):
+        import random as _random
+        return _random.randint(args[0], args[1])
+
+    @staticmethod
+    def _handle_os(ko_self, args, node):
+        import os as _os
+        if len(args) == 1:
+            path = args[0]
+            if not _is_safe_os_path(path):
+                raise KoCompileError(f"Security violation: path '{path}' is not in allowed paths")
+            try:
+                f = open(path, "r")
+                content = f.read()
+                f.close()
+                return content
+            except FileNotFoundError:
+                return ""
+        return ""
+
+    @staticmethod
+    def _handle_web(ko_self, args, node):
+        return ""
+
+    @staticmethod
+    def _handle_domain(ko_self, args, node):
+        return args[0] if args else ""
+
+    @staticmethod
+    def _handle_web_domain(ko_self, args, node):
+        return args[0] if args else ""
+
+    @staticmethod
+    def _handle_web_fetch(ko_self, args, node):
+        import urllib.request
+        from urllib.parse import urlparse
+        if args:
+            url = args[0]
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                raise KoCompileError(f"Security violation: URL scheme '{parsed.scheme}' is not allowed for web.fetch")
+            try:
+                response = urllib.request.urlopen(url)
+                return response.read().decode('utf-8')
+            except Exception:
+                return ""
+        return ""
+
+    @staticmethod
+    def _handle_web_status(ko_self, args, node):
+        import urllib.request
+        from urllib.parse import urlparse
+        if args:
+            url = args[0]
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https"):
+                raise KoCompileError(f"Security violation: URL scheme '{parsed.scheme}' is not allowed for web.status")
+            try:
+                response = urllib.request.urlopen(url)
+                return response.read().decode('utf-8')
+            except Exception:
+                return ""
+        return ""
+
+    @staticmethod
+    def _handle_os_read_file(ko_self, args, node):
+        if args:
+            path = args[0]
+            if not _is_safe_os_path(path):
+                raise KoCompileError(f"Security violation: path '{path}' is not in allowed paths")
+            try:
+                with open(path, 'r') as f:
+                    return f.read()
+            except FileNotFoundError:
+                return ""
+        return ""
+
+    @staticmethod
+    def _handle_os_write_file(ko_self, args, node):
+        if len(args) >= 2:
+            path = args[0]
+            if not _is_safe_os_path(path):
+                raise KoCompileError(f"Security violation: path '{path}' is not in allowed paths")
+            try:
+                with open(path, 'w') as f:
+                    f.write(args[1])
+                return True
+            except Exception:
+                return False
+        return False
+
+    @staticmethod
+    def _handle_os_list_dir(ko_self, args, node):
+        import os
+        if args:
+            try:
+                return os.listdir(args[0])
+            except Exception:
+                return []
+        return []
+
+    @staticmethod
+    def _handle_random_random_int(ko_self, args, node):
+        import random
+        if len(args) >= 2:
+            return random.randint(args[0], args[1])
+        return 0
+
+    @staticmethod
+    def _handle_byte(ko_self, args, node):
+        return to_byte(args[0]) if args else None
+
+    @staticmethod
+    def _handle_bytes(ko_self, args, node):
+        if len(args) == 1:
+            val = args[0]
+            if isinstance(val, str):
+                try:
+                    int(val, 16)
+                    return bytes.fromhex(val)
+                except ValueError:
+                    return int(val) * b'\x00'
+            return b'\x00' * int(val)
+        return bytes(args[0])
+
+    @staticmethod
+    def _handle_encode(ko_self, args, node):
+        if len(args) >= 2:
+            encoding_map = {"ASCII": "ascii", "UTF-8": "utf-8", "UTF-16": "utf-16"}
+            encoding = encoding_map.get(str(args[1]).strip("'\""), "utf-8")
+            return str(args[0]).encode(encoding)
+        return str(args[0]).encode('utf-8')
+
+    @staticmethod
+    def _handle_len(ko_self, args, node):
+        if args:
+            val = args[0]
+            if isinstance(val, (str, bytes, list, tuple, dict)):
+                return len(val)
+            return 0
+        return 0
+
+    _call_handlers = {
+        "print": _handle_print,
+        "memory_addr": _handle_memory_addr,
+        "memory_free": _handle_memory_free,
+        "printf": _handle_printf,
+        "input": _handle_input,
+        "return": _handle_return,
+        "random": _handle_random,
+        "os": _handle_os,
+        "web": _handle_web,
+        "domain": _handle_domain,
+        "web.domain": _handle_web_domain,
+        "web.fetch": _handle_web_fetch,
+        "web.status": _handle_web_status,
+        "os.read_file": _handle_os_read_file,
+        "os.write_file": _handle_os_write_file,
+        "os.list_dir": _handle_os_list_dir,
+        "random.random_int": _handle_random_random_int,
+        "byte": _handle_byte,
+        "bytes": _handle_bytes,
+        "encode": _handle_encode,
+        "len": _handle_len,
+    }
 
     def visit_VarDecl(self, node: VarDecl):
         if node.is_instantiation:
@@ -1892,7 +2061,6 @@ class IRBuilder:
         from ir import IRType, IROpcode
         if ir_type is None:
             ir_type = IRType.UNKNOWN
-        self.emit(IROpcode.BINARY_OP, op, left, result, ir_type, line)
         self.emit(IROpcode.BINARY_OP, op, right, result, ir_type, line)
 
     def emit_call(self, func_name, args, result, ir_type=None, line=0):
@@ -2308,6 +2476,16 @@ def _contains_banned_url_scheme(line: str) -> bool:
         if scheme + "://" in line:
             return True
     return False
+
+
+def _is_safe_os_path(path: str) -> bool:
+    if not path:
+        return False
+    if ".." in path:
+        return False
+    if not os.path.isabs(path):
+        path = os.path.abspath(path)
+    return any(path == sp or path.startswith(sp + "/") for sp in SAFE_OS_PATHS)
 
 
 def run_ko_file(path: str) -> None:

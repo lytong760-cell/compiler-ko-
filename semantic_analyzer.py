@@ -57,6 +57,7 @@ class SemanticAnalyzer:
         self.warnings: List[str] = []
         self.scope_stack: List[SemanticScope] = []
         self.current_function: Optional[str] = None
+        self.current_function_ir: Optional[object] = None
         self.current_class: Optional[str] = None
         self.in_private: bool = False
         self.loop_depth: int = 0
@@ -134,10 +135,6 @@ class SemanticAnalyzer:
     def _analyze_function(self, func: object, ir_module: IRModule) -> None:
         from ir import IRFunction, IRVariable, IRType
 
-        for param in func.params:
-            ir_var = IRVariable(param.name, self._type_name_to_ir_type(param.type_name), defined=True)
-            ir_module.global_vars[param.name] = ir_var
-
         func_ir = IRFunction(
             name=func.name,
             params=[IRVariable(p.name, self._type_name_to_ir_type(p.type_name), defined=True) for p in func.params],
@@ -147,15 +144,18 @@ class SemanticAnalyzer:
         )
 
         old_function = self.current_function
+        old_function_ir = self.current_function_ir
         old_return_count = self.return_count
         old_func_return_type = self.function_return_type
         self.current_function = func.name
+        self.current_function_ir = func_ir
         self.return_count = 0
         self.function_return_type = None
 
         scope = self._push_scope(func.name)
         for param in func.params:
             scope.define_var(param.name, param.type_name or "unknown")
+            func_ir.local_vars[param.name] = IRVariable(param.name, self._type_name_to_ir_type(param.type_name), defined=True)
 
         for stmt in func.body:
             self._analyze_statement(stmt, scope, ir_module)
@@ -164,6 +164,7 @@ class SemanticAnalyzer:
         self._pop_scope()
 
         self.current_function = old_function
+        self.current_function_ir = old_function_ir
         self.return_count = old_return_count
         self.function_return_type = old_func_return_type
 
@@ -288,7 +289,10 @@ class SemanticAnalyzer:
         var_type = stmt.type_name or "unknown"
         scope.define_var(stmt.name, var_type)
         ir_var = IRVariable(stmt.name, self._type_name_to_ir_type(var_type), defined=True)
-        ir_module.global_vars[stmt.name] = ir_var
+        if self.current_function_ir is not None:
+            self.current_function_ir.local_vars[stmt.name] = ir_var
+        else:
+            ir_module.global_vars[stmt.name] = ir_var
 
     def _analyze_assignment(self, stmt: Assignment, scope: SemanticScope, ir_module: IRModule) -> None:
         self._analyze_expression(stmt.value, scope, ir_module)
@@ -306,6 +310,7 @@ class SemanticAnalyzer:
             self._warning(f"Mutation of undeclared variable '{stmt.target.name}'", 0)
 
     def _analyze_if(self, stmt: IfStmt, scope: SemanticScope, ir_module: IRModule) -> None:
+        from ko_compiler import IfStmt
         self._analyze_expression(stmt.condition, scope, ir_module)
         self._analyze_statement_block(stmt.body, scope, ir_module)
         if stmt.else_body:
