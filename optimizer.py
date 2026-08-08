@@ -48,7 +48,7 @@ class ConstantFolder:
         right = instr.arg2
 
         if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-            op = instr.result
+            op = instr.op
             if op == "+":
                 return IRInstruction(IROpcode.LOAD_CONST, left + right, None, instr.result, instr.type, instr.line)
             elif op == "-":
@@ -83,7 +83,7 @@ class ConstantFolder:
 
     def _fold_unary_op(self, instr: IRInstruction) -> Optional[IRInstruction]:
         operand = instr.arg
-        op = instr.result
+        op = instr.op
 
         if isinstance(operand, (int, float)):
             if op == "-":
@@ -177,16 +177,9 @@ class PeepholeOptimizer:
         bb.instructions = instructions
 
     def _try_peephole(self, a: IRInstruction, b: IRInstruction) -> Optional[IRInstruction]:
-        from ir import IROpcode, IRType
-
-        if a.opcode == IROpcode.LOAD_CONST and b.opcode == IROpcode.BINARY_OP:
-            if b.arg2 == a.result and b.result == a.result:
-                if b.result == "+":
-                    return IRInstruction(IROpcode.LOAD_CONST, a.arg, None, b.result, b.type, a.line)
-                elif b.result == "*" and a.arg == 1:
-                    return IRInstruction(IROpcode.LOAD_CONST, a.arg, None, b.result, b.type, a.line)
-                elif b.result == "*" and a.arg == 0:
-                    return IRInstruction(IROpcode.LOAD_CONST, 0, None, b.result, b.type, a.line)
+        # Peephole optimizations are intentionally conservative for now.
+        # The previous implementation had incorrect operand/op semantics and produced unsafe transformations.
+        # Defer complex peephole rewrites until IRInstruction operand/op semantics are fully propagated.
         return None
 
 
