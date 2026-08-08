@@ -74,6 +74,7 @@ class IRInstruction:
     type: IRType = IRType.UNKNOWN
     line: int = 0
     is_dead: bool = False
+    op: Optional[str] = None
 
 
 @dataclass
@@ -93,6 +94,7 @@ class IRFunction:
     local_vars: Dict[str, IRVariable] = field(default_factory=dict)
     is_method: bool = False
     is_private: bool = False
+    captured_vars: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -150,10 +152,10 @@ class IRBuilder:
 
     def emit(self, opcode: IROpcode, arg: Any = None, arg2: Any = None,
              result: Optional[str] = None, ir_type: IRType = IRType.UNKNOWN,
-             line: int = 0) -> IRInstruction:
+             line: int = 0, op: Optional[str] = None) -> IRInstruction:
         instr = IRInstruction(
             opcode=opcode, arg=arg, arg2=arg2,
-            result=result, type=ir_type, line=line
+            result=result, type=ir_type, line=line, is_dead=False, op=op
         )
         if self.current_block is not None:
             self.current_block.instructions.append(instr)
@@ -174,12 +176,12 @@ class IRBuilder:
 
     def emit_binary_op(self, op: str, left: str, right: str,
                        result: str, ir_type: IRType = IRType.UNKNOWN, line: int = 0) -> None:
-        self.emit(IROpcode.BINARY_OP, op, left, result, ir_type, line)
-        self.emit(IROpcode.BINARY_OP, op, right, result, ir_type, line)
+        # Single BINARY_OP instruction: arg = left, arg2 = right, result = destination temp, op = operator
+        self.emit(IROpcode.BINARY_OP, left, right, result, ir_type, line, op=op)
 
     def emit_unary_op(self, op: str, operand: str,
                       result: str, ir_type: IRType = IRType.UNKNOWN, line: int = 0) -> None:
-        self.emit(IROpcode.UNARY_OP, op, operand, result, ir_type, line)
+        self.emit(IROpcode.UNARY_OP, operand, None, result, ir_type, line, op=op)
 
     def emit_call(self, func_name: str, args: List[str], result: Optional[str],
                   ir_type: IRType = IRType.UNKNOWN, line: int = 0) -> None:
@@ -249,7 +251,8 @@ def ir_to_string(module: IRModule) -> str:
         for bb in func.body:
             lines.append(f"    BLOCK {bb.name}:")
             for instr in bb.instructions:
-                lines.append(f"      {instr.opcode.value} {instr.arg} {instr.arg2} -> {instr.result} [{instr.type.value}]")
+                op_display = f" {instr.op} " if instr.op else " "
+                lines.append(f"      {instr.opcode.value} {instr.arg}{op_display}{instr.arg2} -> {instr.result} [{instr.type.value}]")
     for name, cls in module.classes.items():
         lines.append(f"  CLASS {name}")
         for fname, field in cls.fields.items():
@@ -261,11 +264,13 @@ def ir_to_string(module: IRModule) -> str:
         for bb in module.main:
             lines.append(f"    BLOCK {bb.name}:")
             for instr in bb.instructions:
-                lines.append(f"      {instr.opcode.value} {instr.arg} {instr.arg2} -> {instr.result} [{instr.type.value}]")
+                op_display = f" {instr.op} " if instr.op else " "
+                lines.append(f"      {instr.opcode.value} {instr.arg}{op_display}{instr.arg2} -> {instr.result} [{instr.type.value}]")
     for catch in module.catch_blocks:
         lines.append(f"  CATCH ({catch.error_code or catch.condition}):")
         for bb in catch.body:
             lines.append(f"    BLOCK {bb.name}:")
             for instr in bb.instructions:
-                lines.append(f"      {instr.opcode.value} {instr.arg} {instr.arg2} -> {instr.result}")
+                op_display = f" {instr.op} " if instr.op else " "
+                lines.append(f"      {instr.opcode.value} {instr.arg}{op_display}{instr.arg2} -> {instr.result}")
     return "\n".join(lines)

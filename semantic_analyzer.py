@@ -76,6 +76,15 @@ class SemanticAnalyzer:
     def _current_scope(self) -> SemanticScope:
         return self.scope_stack[-1]
 
+    def _qualified_name(self, name: str) -> str:
+        parts = []
+        if self.current_class:
+            parts.append(self.current_class)
+        if self.current_function:
+            parts.append(self.current_function)
+        parts.append(name)
+        return ".".join(parts)
+
     def _error(self, message: str, line: int = 0) -> None:
         self.errors.append(f"Semantic error at line {line}: {message}")
 
@@ -168,7 +177,8 @@ class SemanticAnalyzer:
         self.return_count = old_return_count
         self.function_return_type = old_func_return_type
 
-        ir_module.functions[func.name] = func_ir
+        qualified_name = self._qualified_name(func.name)
+        ir_module.functions[qualified_name] = func_ir
 
     def _analyze_class(self, cls: object, ir_module: IRModule) -> None:
         from ir import IRClass, IRVariable, IRType, IRFunction
@@ -203,7 +213,8 @@ class SemanticAnalyzer:
             private_fields=private_fields,
             private_methods=private_methods
         )
-        ir_module.classes[cls.name] = ir_class
+        qualified_name = self._qualified_name(cls.name)
+        ir_module.classes[qualified_name] = ir_class
         self.current_class = old_class
 
     def _build_method_ir(self, func: object) -> IRFunction:
@@ -270,8 +281,12 @@ class SemanticAnalyzer:
         elif isinstance(stmt, WhileLoop):
             self._analyze_while_loop(stmt, scope, ir_module)
         elif isinstance(stmt, FuncDecl):
+            # Register nested function in current scope (lexical scoping / closures supported)
+            scope.define_func(stmt.name, stmt)
             self._analyze_function(stmt, ir_module)
         elif isinstance(stmt, ClassDecl):
+            # Register nested class in current scope
+            scope.define_class(stmt.name, stmt)
             self._analyze_class(stmt, ir_module)
         elif isinstance(stmt, Call):
             self._analyze_call(stmt, scope, ir_module)
