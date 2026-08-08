@@ -270,8 +270,12 @@ class SemanticAnalyzer:
         elif isinstance(stmt, WhileLoop):
             self._analyze_while_loop(stmt, scope, ir_module)
         elif isinstance(stmt, FuncDecl):
+            # Register nested function in current scope (lexical scoping / closures supported)
+            scope.define_func(stmt.name, stmt)
             self._analyze_function(stmt, ir_module)
         elif isinstance(stmt, ClassDecl):
+            # Register nested class in current scope
+            scope.define_class(stmt.name, stmt)
             self._analyze_class(stmt, ir_module)
         elif isinstance(stmt, Call):
             self._analyze_call(stmt, scope, ir_module)

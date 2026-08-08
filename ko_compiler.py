@@ -2025,13 +2025,13 @@ class IRBuilder:
     def new_label(self, prefix: str = "L") -> str:
         return f"{prefix}_{self.temp_counter}"
 
-    def emit(self, opcode, arg=None, arg2=None, result=None, ir_type=None, line=0):
+    def emit(self, opcode, arg=None, arg2=None, result=None, ir_type=None, line=0, op=None):
         from ir import IRInstruction, IROpcode, IRType
         if ir_type is None:
             ir_type = IRType.UNKNOWN
         instr = IRInstruction(
             opcode=opcode, arg=arg, arg2=arg2,
-            result=result, type=ir_type, line=line
+            result=result, type=ir_type, line=line, op=op
         )
         if self.current_block is not None:
             self.current_block.instructions.append(instr)
@@ -2061,7 +2061,7 @@ class IRBuilder:
         from ir import IRType, IROpcode
         if ir_type is None:
             ir_type = IRType.UNKNOWN
-        self.emit(IROpcode.BINARY_OP, op, right, result, ir_type, line)
+        self.emit(IROpcode.BINARY_OP, left, right, result, ir_type, line, op=op)
 
     def emit_call(self, func_name, args, result, ir_type=None, line=0):
         from ir import IRType, IROpcode
@@ -2149,7 +2149,9 @@ class IRBuilder:
         params = [IRVariable(p.name, self._type_name_to_ir_type(p.type_name), defined=True) for p in func.params]
 
         old_function = self.current_function
+        old_basic_blocks = self.basic_blocks
         self.current_function = func.name
+        self.basic_blocks = []
 
         self.start_block(f"{func.name}_entry")
         for stmt in func.body:
@@ -2165,6 +2167,7 @@ class IRBuilder:
         )
         self.module.functions[func.name] = func_ir
         self.current_function = old_function
+        self.basic_blocks = old_basic_blocks
 
     def _build_class(self, cls):
         from ir import IRClass, IRVariable, IRType, IRFunction
@@ -2203,34 +2206,54 @@ class IRBuilder:
 
     def _build_method_ir(self, func):
         from ir import IRFunction, IRVariable, IRType
-        return IRFunction(
+        old_basic_blocks = self.basic_blocks
+        self.basic_blocks = []
+
+        self.start_block(f"{func.name}_entry")
+        for stmt in func.body:
+            self._build_statement(stmt)
+        self.end_block()
+
+        result = IRFunction(
             name=func.name,
             params=[IRVariable(p.name, self._type_name_to_ir_type(p.type_name), defined=True) for p in func.params],
-            body=[],
+            body=self.basic_blocks,
             return_type=IRType.UNKNOWN,
             is_method=True,
             is_private=False
         )
+        self.basic_blocks = old_basic_blocks
+        return result
 
     def _build_main(self, main):
+        old_basic_blocks = self.basic_blocks
+        self.basic_blocks = []
+
         self.start_block("main_entry")
         for stmt in main.body:
             self._build_statement(stmt)
         self.end_block()
+
         self.module.main = self.basic_blocks
+        self.basic_blocks = old_basic_blocks
 
     def _build_catch(self, catch):
         from ir import IRCatchBlock
+
+        old_basic_blocks = self.basic_blocks
+        self.basic_blocks = []
 
         self.start_block("catch_entry")
         for stmt in catch.body:
             self._build_statement(stmt)
         self.end_block()
+
         self.module.catch_blocks.append(IRCatchBlock(
             error_code=catch.error_condition if isinstance(catch.error_condition, str) else None,
             condition=str(catch.error_condition) if not isinstance(catch.error_condition, str) else None,
             body=self.basic_blocks
         ))
+        self.basic_blocks = old_basic_blocks
 
     def _build_statement(self, stmt):
         if isinstance(stmt, VarDecl):
@@ -2258,14 +2281,18 @@ class IRBuilder:
 
     def _build_var_decl(self, stmt):
         from ir import IRVariable, IRType
+        value_temp = None
         if stmt.initializer is not None:
-            self._build_expression(stmt.initializer)
+            value_temp = self._build_expression(stmt.initializer)
         var_type = stmt.type_name or "unknown"
         ir_var = IRVariable(stmt.name, self._type_name_to_ir_type(var_type), defined=True)
         self.module.global_vars[stmt.name] = ir_var
+        if value_temp is not None:
+            self.emit_store(stmt.name, value_temp)
 
     def _build_assignment(self, stmt):
-        self._build_expression(stmt.value)
+        value_temp = self._build_expression(stmt.value)
+        self.emit_store(stmt.target.name, value_temp)
 
     def _build_now_mutation(self, stmt):
         self._build_expression(stmt.expr)
@@ -2301,34 +2328,48 @@ class IRBuilder:
     def _build_expression(self, expr):
         from ir import IRType
         if isinstance(expr, Literal):
-            self.emit_constant(expr.value, self._literal_type(expr), 0)
+            return self.emit_constant(expr.value, self._literal_type(expr), 0)
         elif isinstance(expr, Identifier):
-            self.emit_load(expr.name, IRType.UNKNOWN, 0)
+            return self.emit_load(expr.name, IRType.UNKNOWN, 0)
         elif isinstance(expr, BinaryOp):
-            self._build_expression(expr.left)
-            self._build_expression(expr.right)
-            self.emit_binary_op(self._op_to_str(expr.op), "_t_left", "_t_right", "_t_result", IRType.UNKNOWN, 0)
+            left_temp = self._build_expression(expr.left)
+            right_temp = self._build_expression(expr.right)
+            result_temp = self.new_temp()
+            self.emit_binary_op(self._op_to_str(expr.op), left_temp, right_temp, result_temp, IRType.UNKNOWN, 0)
+            return result_temp
         elif isinstance(expr, UnaryOp):
-            self._build_expression(expr.expr)
-            self.emit_unary_op(self._op_to_str(expr.op), "_t_operand", "_t_result", IRType.UNKNOWN, 0)
+            operand_temp = self._build_expression(expr.expr)
+            result_temp = self.new_temp()
+            self.emit_unary_op(self._op_to_str(expr.op), operand_temp, result_temp, IRType.UNKNOWN, 0)
+            return result_temp
         elif isinstance(expr, Call):
             args = []
             for arg in expr.args:
-                self._build_expression(arg)
-                args.append("_t_result")
-            self.emit_call(expr.name, args, "_t_result", IRType.UNKNOWN, 0)
+                args.append(self._build_expression(arg))
+            result_temp = self.new_temp()
+            self.emit_call(expr.name, args, result_temp, IRType.UNKNOWN, 0)
+            return result_temp
         elif isinstance(expr, Indexing):
-            self._build_expression(expr.target)
-            for idx in expr.index:
-                self._build_expression(idx)
-            self.emit_binary_subscr("_t_target", "_t_index", "_t_result", IRType.UNKNOWN, 0)
+            target_temp = self._build_expression(expr.target)
+            index_temp = self._build_expression(expr.index[0]) if expr.index else None
+            result_temp = self.new_temp()
+            if index_temp is not None:
+                self.emit_binary_subscr(target_temp, index_temp, result_temp, IRType.UNKNOWN, 0)
+            else:
+                self.emit_load("None", IRType.NONE, 0)
+            return result_temp
         elif isinstance(expr, TupleLiteral):
+            result_temp = self.new_temp()
             for elem in expr.elements:
                 self._build_expression(elem)
+            return result_temp
         elif isinstance(expr, DictLiteral):
+            result_temp = self.new_temp()
             for k, v in expr.mapping.items():
                 self._build_expression(k)
                 self._build_expression(v)
+            return result_temp
+        return None
 
     def _op_to_str(self, op):
         op_map = {
@@ -2369,7 +2410,7 @@ class IRBuilder:
         from ir import IRType, IROpcode
         if ir_type is None:
             ir_type = IRType.UNKNOWN
-        self.emit(IROpcode.UNARY_OP, op, operand, result, ir_type, line)
+        self.emit(IROpcode.UNARY_OP, operand, None, result, ir_type, line, op=op)
 
 
 def run_ko_source(source: str, file_name: str = "<stdin>", enable_optimization: bool = True) -> None:
