@@ -8,34 +8,30 @@
 | ========================================================== |
 | Test: Loops (for with step, while) |
 | ========================================================== |
-
-| For loop with default step (+1) |
-**Loop** <for>(~x=1&=5) [
-    <printf>^("For loop x={x}\n")
-]
-
-| For loop with custom step (+2) |
-**Loop** <for>(~i=1(2)&=5) [
-    <printf>^("For loop with step i={i}\n")
-]
-
-| For loop with step +3 |
-**Loop** <for>(~j=0(3)&=9) [
-    <printf>^("For loop step 3 j={j}\n")
-]
-
-| While loop using @loop syntax |
-int(3)~loop_count
-@loop(loop_count > 0)
-**Loop** <for.f.whle>@also [
-    <printf>^("While loop iteration, count={loop_count}\n")
-    <now>(loop_count - 1)>loop_count
-]
-
-| ========================================================== |
-| Test: Using imported modules |
-| ========================================================== |
 [
+    | For loop with default step (+1) |
+    **Loop** <for>(~x=1&=5) [
+        <printf>^("For loop x={x}\n")
+    ]
+
+    | For loop with custom step (+2) |
+    **Loop** <for>(~i=1(2)&=5) [
+        <printf>^("For loop with step i={i}\n")
+    ]
+
+    | For loop with step +3 |
+    **Loop** <for>(~j=0(3)&=9) [
+        <printf>^("For loop step 3 j={j}\n")
+    ]
+
+    | While loop using @loop syntax |
+    int(3)~loop_count
+    @loop(loop_count > 0)
+    **Loop** <for.f.whle>@also [
+        <printf>^("While loop iteration, count={loop_count}\n")
+        <now>(loop_count - 1)>loop_count
+    ]
+
     | Use Random module |
     int(<$random>(1, 100))~rand_val
     <printf>^("Random value: {rand_val}\n")

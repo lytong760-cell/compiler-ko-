@@ -76,6 +76,15 @@ class SemanticAnalyzer:
     def _current_scope(self) -> SemanticScope:
         return self.scope_stack[-1]
 
+    def _qualified_name(self, name: str) -> str:
+        parts = []
+        if self.current_class:
+            parts.append(self.current_class)
+        if self.current_function:
+            parts.append(self.current_function)
+        parts.append(name)
+        return ".".join(parts)
+
     def _error(self, message: str, line: int = 0) -> None:
         self.errors.append(f"Semantic error at line {line}: {message}")
 
@@ -168,7 +177,8 @@ class SemanticAnalyzer:
         self.return_count = old_return_count
         self.function_return_type = old_func_return_type
 
-        ir_module.functions[func.name] = func_ir
+        qualified_name = self._qualified_name(func.name)
+        ir_module.functions[qualified_name] = func_ir
 
     def _analyze_class(self, cls: object, ir_module: IRModule) -> None:
         from ir import IRClass, IRVariable, IRType, IRFunction
@@ -203,7 +213,8 @@ class SemanticAnalyzer:
             private_fields=private_fields,
             private_methods=private_methods
         )
-        ir_module.classes[cls.name] = ir_class
+        qualified_name = self._qualified_name(cls.name)
+        ir_module.classes[qualified_name] = ir_class
         self.current_class = old_class
 
     def _build_method_ir(self, func: object) -> IRFunction:
@@ -303,7 +314,10 @@ class SemanticAnalyzer:
 
         var_type = scope.lookup_var(stmt.target.name)
         if var_type is None:
-            self._warning(f"Assignment to undeclared variable '{stmt.target.name}'", 0)
+            if stmt.type_name:
+                scope.define_var(stmt.target.name, stmt.type_name)
+            else:
+                scope.define_var(stmt.target.name, "unknown")
         elif stmt.type_name and var_type != stmt.type_name:
             self._warning(f"Type mismatch in assignment to '{stmt.target.name}': expected {var_type}, got {stmt.type_name}", 0)
 

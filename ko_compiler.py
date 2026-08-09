@@ -889,7 +889,7 @@ class KoParser:
         var_name = self._consume(TokenType.ID, "Expected loop variable").value
         self._consume(TokenType.ASSIGN, "Expected =")
         
-        start = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        start = self.parse_expression(stop_tokens=[TokenType.RPAREN, TokenType.LPAREN])
         
         step = None
         if self._match(TokenType.LPAREN):
@@ -1339,6 +1339,7 @@ class KoInterpreter:
         self.classes = {}
         self._recursion_depth = 0
         self._loop_iterations = 0
+        self._loop_optimization_reports = []
 
     def push_scope(self):
         self.scopes.append({})
@@ -1551,6 +1552,32 @@ class KoInterpreter:
                 for stmt in node.else_body:
                     self.visit(stmt)
 
+    def _try_loop_engine(self, var_name, start, end, step, body):
+        try:
+            import tempfile
+            compiler_dir = os.path.dirname(os.path.abspath(__file__))
+            loop_engine = os.path.join(compiler_dir, "LoopEngine")
+            if not os.path.exists(loop_engine):
+                return None
+            body_file = None
+            try:
+                body_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+                for stmt in body:
+                    body_file.write(f"visit({stmt.__class__.__name__})\n")
+                body_file.close()
+                result = subprocess.run(
+                    [loop_engine, var_name, str(start), str(end), str(step), body_file.name, "1"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode == 0:
+                    return result.stdout.strip()
+            finally:
+                if body_file and os.path.exists(body_file.name):
+                    os.unlink(body_file.name)
+        except Exception:
+            pass
+        return None
+
     def visit_ForLoop(self, node: ForLoop):
         start = self.visit(node.start)
         end = self.visit(node.end)
@@ -1562,6 +1589,10 @@ class KoInterpreter:
         total_iterations = max(0, (end - start) // step + 1) if (step > 0 and start <= end) or (step < 0 and start >= end) else 0
         if total_iterations > MAX_LOOP_ITERATIONS:
             raise KoCompileError(f"Loop iteration count ({total_iterations}) exceeds maximum ({MAX_LOOP_ITERATIONS})")
+
+        loop_report = self._try_loop_engine(node.var_name, start, end, step, node.body)
+        if loop_report:
+            self._loop_optimization_reports.append(loop_report)
 
         for i in range(start, end + 1, step):
             self._loop_iterations += 1
@@ -1863,8 +1894,9 @@ class KoInterpreter:
 
     def visit_VarDecl(self, node: VarDecl):
         if node.is_instantiation:
-            if node.type_name in self.classes:
-                cls = self.classes[node.type_name]
+            class_name = node.initializer or node.type_name
+            if class_name in self.classes:
+                cls = self.classes[class_name]
                 instance = cls.__init__(cls)
                 self.set_var(node.name, instance)
             else:
@@ -2012,6 +2044,7 @@ class IRBuilder:
     def __init__(self):
         self.module = None
         self.current_function = None
+        self.current_function_ir = None
         self.current_class = None
         self.basic_blocks = []
         self.current_block = None
@@ -2024,6 +2057,15 @@ class IRBuilder:
 
     def new_label(self, prefix: str = "L") -> str:
         return f"{prefix}_{self.temp_counter}"
+
+    def _qualified_name(self, name: str) -> str:
+        parts = []
+        if self.current_class:
+            parts.append(self.current_class)
+        if self.current_function:
+            parts.append(self.current_function)
+        parts.append(name)
+        return ".".join(parts)
 
     def emit(self, opcode, arg=None, arg2=None, result=None, ir_type=None, line=0, op=None):
         from ir import IRInstruction, IROpcode, IRType
@@ -2150,6 +2192,7 @@ class IRBuilder:
 
         old_function = self.current_function
         old_basic_blocks = self.basic_blocks
+        old_current_block = self.current_block
         self.current_function = func.name
         self.basic_blocks = []
 
@@ -2168,6 +2211,7 @@ class IRBuilder:
         self.module.functions[func.name] = func_ir
         self.current_function = old_function
         self.basic_blocks = old_basic_blocks
+        self.current_block = old_current_block
 
     def _build_class(self, cls):
         from ir import IRClass, IRVariable, IRType, IRFunction
@@ -2207,27 +2251,43 @@ class IRBuilder:
     def _build_method_ir(self, func):
         from ir import IRFunction, IRVariable, IRType
         old_basic_blocks = self.basic_blocks
+        old_current_block = self.current_block
+        old_function = self.current_function
+        old_function_ir = self.current_function_ir
         self.basic_blocks = []
+
+        self.current_function = func.name
+        self.current_function_ir = IRFunction(
+            name=func.name,
+            params=[IRVariable(p.name, self._type_name_to_ir_type(p.type_name), defined=True) for p in func.params],
+            body=[],
+            return_type=IRType.UNKNOWN,
+            is_method=True,
+            is_private=False
+        )
 
         self.start_block(f"{func.name}_entry")
         for stmt in func.body:
             self._build_statement(stmt)
         self.end_block()
 
-        result = IRFunction(
-            name=func.name,
-            params=[IRVariable(p.name, self._type_name_to_ir_type(p.type_name), defined=True) for p in func.params],
-            body=self.basic_blocks,
-            return_type=IRType.UNKNOWN,
-            is_method=True,
-            is_private=False
-        )
+        self.current_function_ir.body = self.basic_blocks
+        result = self.current_function_ir
         self.basic_blocks = old_basic_blocks
+        self.current_block = old_current_block
+        self.current_function = old_function
+        self.current_function_ir = old_function_ir
         return result
 
     def _build_main(self, main):
         old_basic_blocks = self.basic_blocks
+        old_current_block = self.current_block
+        old_function = self.current_function
+        old_function_ir = self.current_function_ir
         self.basic_blocks = []
+
+        self.current_function = "__main__"
+        self.current_function_ir = None
 
         self.start_block("main_entry")
         for stmt in main.body:
@@ -2236,6 +2296,9 @@ class IRBuilder:
 
         self.module.main = self.basic_blocks
         self.basic_blocks = old_basic_blocks
+        self.current_block = old_current_block
+        self.current_function = old_function
+        self.current_function_ir = old_function_ir
 
     def _build_catch(self, catch):
         from ir import IRCatchBlock
@@ -2286,7 +2349,10 @@ class IRBuilder:
             value_temp = self._build_expression(stmt.initializer)
         var_type = stmt.type_name or "unknown"
         ir_var = IRVariable(stmt.name, self._type_name_to_ir_type(var_type), defined=True)
-        self.module.global_vars[stmt.name] = ir_var
+        if self.current_function_ir is not None:
+            self.current_function_ir.local_vars[stmt.name] = ir_var
+        else:
+            self.module.global_vars[stmt.name] = ir_var
         if value_temp is not None:
             self.emit_store(stmt.name, value_temp)
 
@@ -2326,7 +2392,7 @@ class IRBuilder:
             self._build_expression(arg)
 
     def _build_expression(self, expr):
-        from ir import IRType
+        from ir import IRType, IROpcode
         if isinstance(expr, Literal):
             return self.emit_constant(expr.value, self._literal_type(expr), 0)
         elif isinstance(expr, Identifier):
@@ -2347,27 +2413,33 @@ class IRBuilder:
             for arg in expr.args:
                 args.append(self._build_expression(arg))
             result_temp = self.new_temp()
-            self.emit_call(expr.name, args, result_temp, IRType.UNKNOWN, 0)
+            qualified_name = self._qualified_name(expr.name)
+            self.emit_call(qualified_name, args, result_temp, IRType.UNKNOWN, 0)
             return result_temp
         elif isinstance(expr, Indexing):
             target_temp = self._build_expression(expr.target)
-            index_temp = self._build_expression(expr.index[0]) if expr.index else None
-            result_temp = self.new_temp()
-            if index_temp is not None:
+            if not expr.index:
+                raise KoCompileError("Indexing requires at least one index expression", 0, 0)
+            for idx_expr in expr.index:
+                index_temp = self._build_expression(idx_expr)
+                result_temp = self.new_temp()
                 self.emit_binary_subscr(target_temp, index_temp, result_temp, IRType.UNKNOWN, 0)
-            else:
-                self.emit_load("None", IRType.NONE, 0)
+                target_temp = result_temp
             return result_temp
         elif isinstance(expr, TupleLiteral):
             result_temp = self.new_temp()
+            element_temps = []
             for elem in expr.elements:
-                self._build_expression(elem)
+                element_temps.append(self._build_expression(elem))
+            self.emit(IROpcode.BUILD_TUPLE, element_temps, len(element_temps), result_temp, IRType.TUPLE, 0)
             return result_temp
         elif isinstance(expr, DictLiteral):
             result_temp = self.new_temp()
+            kv_temps = []
             for k, v in expr.mapping.items():
-                self._build_expression(k)
-                self._build_expression(v)
+                kv_temps.append(self._build_expression(k))
+                kv_temps.append(self._build_expression(v))
+            self.emit(IROpcode.BUILD_MAP, kv_temps, len(kv_temps) // 2, result_temp, IRType.DICT, 0)
             return result_temp
         return None
 

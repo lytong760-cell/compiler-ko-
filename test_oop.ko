@@ -36,8 +36,8 @@ Character !class [
     ~Character~enemy
 
     | Set names via direct attribute access |
-    ~Hero~hero
-    ~Hero~enemy
+    ~Character~hero
+    ~Character~enemy
 
     | Call methods |
     int($hero~take_damage(20))~hero_hp

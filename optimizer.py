@@ -26,16 +26,17 @@ class ConstantFolder:
 
     def _fold_basic_block(self, bb: IRBasicBlock) -> None:
         from ir import IROpcode
+        const_map = self._build_const_map(bb)
         i = 0
         while i < len(bb.instructions):
             instr = bb.instructions[i]
             if instr.opcode == IROpcode.BINARY_OP:
-                folded = self._fold_binary_op(instr)
+                folded = self._fold_binary_op(instr, const_map)
                 if folded is not None:
                     bb.instructions[i] = folded
                     self.changes_made = True
             elif instr.opcode == IROpcode.UNARY_OP:
-                folded = self._fold_unary_op(instr)
+                folded = self._fold_unary_op(instr, const_map)
                 if folded is not None:
                     bb.instructions[i] = folded
                     self.changes_made = True
@@ -43,9 +44,9 @@ class ConstantFolder:
                 pass
             i += 1
 
-    def _fold_binary_op(self, instr: IRInstruction) -> Optional[IRInstruction]:
-        left = instr.arg
-        right = instr.arg2
+    def _fold_binary_op(self, instr: IRInstruction, const_map: Dict[str, object]) -> Optional[IRInstruction]:
+        left = self._resolve_constant(instr.arg, const_map)
+        right = self._resolve_constant(instr.arg2, const_map)
 
         if isinstance(left, (int, float)) and isinstance(right, (int, float)):
             op = instr.op
@@ -81,8 +82,8 @@ class ConstantFolder:
                 return IRInstruction(IROpcode.LOAD_CONST, left <= right, None, instr.result, instr.type, instr.line)
         return None
 
-    def _fold_unary_op(self, instr: IRInstruction) -> Optional[IRInstruction]:
-        operand = instr.arg
+    def _fold_unary_op(self, instr: IRInstruction, const_map: Dict[str, object]) -> Optional[IRInstruction]:
+        operand = self._resolve_constant(instr.arg, const_map)
         op = instr.op
 
         if isinstance(operand, (int, float)):
@@ -91,6 +92,18 @@ class ConstantFolder:
             elif op == "not":
                 return IRInstruction(IROpcode.LOAD_CONST, not operand, None, instr.result, instr.type, instr.line)
         return None
+
+    def _resolve_constant(self, value: object, const_map: Dict[str, object]) -> object:
+        if isinstance(value, str) and value in const_map:
+            return const_map[value]
+        return value
+
+    def _build_const_map(self, bb: IRBasicBlock) -> Dict[str, object]:
+        const_map: Dict[str, object] = {}
+        for instr in bb.instructions:
+            if instr.opcode == IROpcode.LOAD_CONST and instr.result:
+                const_map[instr.result] = instr.arg
+        return const_map
 
 
 class DeadCodeEliminator:
