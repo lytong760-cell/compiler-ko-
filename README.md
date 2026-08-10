@@ -94,9 +94,11 @@ Allowed modules: `Random`, `Os`, `Website`
 
 ```
 Source (.ko) → KoLexer → KoParser → AST (Program) → KoInterpreter (direct execution)
+                                    → IRBuilder → IR module (for optimizer)
+                                    → SemanticAnalyzer (type checking, scope resolution)
 ```
 
-The interpreter is the primary execution path. The code generator (`KoCodeGenerator`), IR builder (`IRBuilder`), optimizer (`Optimizer`), and `SemanticAnalyzer` are retained for reference but are not used in the main execution flow.
+The interpreter is the primary execution path. The code generator (`KoCodeGenerator`), IR builder (`IRBuilder`), optimizer (`Optimizer`), and `SemanticAnalyzer` are fully integrated into the compilation pipeline for IR generation, optimization, and semantic validation.
 
 ### Key Classes
 
@@ -119,23 +121,34 @@ The interpreter includes source-level security validation:
 - **Allowed URL schemes**: Only `http://` and `https://` are permitted
 - **Dangerous function detection**: `exec()`, `eval()`, `__import__()`, `subprocess`, `os.system`, `shutil`, `pickle`, `shelve` are blocked
 - **Path traversal detection**: `..` in import/file-open contexts is blocked
+- **Duplicate declaration detection**: Nested and global duplicate function/class declarations are detected and reported as semantic errors
 
 ## Testing
 
 - `test_simple.ko` — basic arithmetic regression test
-- `test_spec.ko` — comprehensive test suite with expected output
+- `test_functions.ko` — function declaration and call tests
+- `test_control_flow.ko` — if/elif/else and loop tests
+- `test_oop.ko` — class instantiation and method dispatch tests
+- `test_catch_func.ko` — catch block with function call tests
+- `test_imports_and_loops.ko` — module import and loop integration tests
+- `test_data_structures.ko` — tuple and dictionary tests
+- `test_system_tags.ko` — system tag integration tests
 - `demo.ko` — full demo showcasing all v2.800 features
 - `test_*.ko` — individual feature test files
 
 ## Known Limitations
 
-- `KoInterpreter.visit_FuncDecl` is not implemented (nested function declarations raise `NotImplementedError`)
-- `visit_WhileLoop` uses `MAX_LOOP_ITERATIONS` (1000000) correctly (previously hardcoded to 100000)
-- `visit_CatchStmt` in the interpreter is a no-op (catch blocks are handled by `_handle_catch_in_scope`)
 - `web.domain` and `memory_addr`/`memory_free` are stub implementations in the interpreter
 - `Import.java` and `Loop.cpp` subprocess calls are dead code (always fall back to Python)
-- Dictionary literal `:` syntax for multiple key-value pairs is now supported
-- Tuple/dict declarations at global scope are now supported
+
+## Recent Improvements
+
+- **Class identity from enclosing context**: Nested classes now retain distinct enclosing-class identities in the IR module, preventing top-level classes from being self-qualified.
+- **Nested declaration duplicate checks**: The semantic analyzer now detects and reports duplicate nested function and class declarations before registration.
+- **Multi-index support**: Chained indexing expressions (e.g., `dic{1{'a'}}`) are correctly lowered to sequential `BINARY_SUBSCR` operations.
+- **Collection literal retention**: `TupleLiteral` and `DictLiteral` branches now preserve ordered element/key-value temporaries for `BUILD_TUPLE` and `BUILD_MAP` instructions.
+- **Qualified function resolution**: Call expressions resolve against the active declaration scope, ensuring emitted targets match `IRModule.functions` keys.
+- **Local variable scoping**: Declarations inside function/method bodies populate `IRFunction.local_vars` instead of overwriting module-level entries.
 
 ## Spec Version
 
