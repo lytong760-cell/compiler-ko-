@@ -1528,7 +1528,7 @@ class KoInterpreter:
                 self.set_var(node.alias, module_info)
             else:
                 raise KoCompileError(f"Import.java failed: {result.stderr.strip()}")
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError, KoCompileError):
             self.set_var(node.alias, {"module": node.module_name, "alias": node.alias, "scopeTag": node.scope_tag})
 
     def visit_WhileLoop(self, node: WhileLoop):
@@ -1554,6 +1554,7 @@ class KoInterpreter:
 
     def _try_loop_engine(self, var_name, start, end, step, body):
         try:
+            import subprocess
             import tempfile
             compiler_dir = os.path.dirname(os.path.abspath(__file__))
             loop_engine = os.path.join(compiler_dir, "LoopEngine")
