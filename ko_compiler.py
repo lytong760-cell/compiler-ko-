@@ -46,6 +46,7 @@ class TokenType(enum.Enum):
     FOR = "<for>"
     WHILE_ALSO = "<for.f.whle>@also"
     ENCODE = "<encode("
+    LEN = "<len>"
 
     # Sigils & Delimiters
     TILDE = "~"
@@ -218,6 +219,7 @@ class KoLexer:
                     "<for>": TokenType.FOR,
                     "<for.f.whle>@also": TokenType.WHILE_ALSO,
                     "<encode(": TokenType.ENCODE,
+                    "<len>": TokenType.LEN,
                 }
                 
                 if temp_text in tag_map:
@@ -705,6 +707,8 @@ class KoParser:
             return self.parse_system_tag_statement()
         elif self._check(TokenType.ENCODE):
             return self.parse_encode()
+        elif self._check(TokenType.LEN):
+            return self.parse_len()
         elif self._check(TokenType.LPAREN):
             return self.parse_tuple_decl()
         elif self._check(TokenType.LBRACE):
@@ -767,6 +771,14 @@ class KoParser:
         expr = self.parse_expression(stop_tokens=[TokenType.RPAREN])
         self._consume(TokenType.RPAREN, "Expected )")
         return Call("encode", [expr, Literal(encoding_type)])
+
+    def parse_len(self) -> Expr:
+        self._consume(TokenType.LEN, "Expected <len>")
+        self._match(TokenType.CARET)
+        self._consume(TokenType.LPAREN, "Expected (")
+        expr = self.parse_expression(stop_tokens=[TokenType.RPAREN])
+        self._consume(TokenType.RPAREN, "Expected )")
+        return Call("len", [expr])
 
     def parse_tuple_decl(self) -> VarDecl:
         # Handle tuple/array declarations at statement level: (expr, expr)~name
@@ -1104,6 +1116,9 @@ class KoParser:
         
         if self._check(TokenType.ENCODE):
             return self.parse_encode()
+        
+        if self._check(TokenType.LEN):
+            return self.parse_len()
         
         if self._check(TokenType.DOLLAR):
             return self.parse_dollar_reference(stop_tokens)
@@ -1513,23 +1528,30 @@ class KoInterpreter:
         scope["_catch_blocks"].append(node)
 
     def visit_ImportStmt(self, node: ImportStmt) -> None:
-        import subprocess
         import json
-        import tempfile
-        try:
-            compiler_dir = os.path.dirname(os.path.abspath(__file__))
+        import subprocess
+        compiler_dir = os.path.dirname(os.path.abspath(__file__))
+        import_java = os.path.join(compiler_dir, "Import.java")
+        import_class = os.path.join(compiler_dir, "Import.class")
+        if not os.path.exists(import_class):
             result = subprocess.run(
-                ["java", "-cp", compiler_dir, "Import",
-                 node.module_name, node.alias, node.scope_tag],
-                capture_output=True, text=True, timeout=15
+                ["javac", import_java],
+                capture_output=True, text=True, timeout=30
             )
-            if result.returncode == 0:
-                module_info = json.loads(result.stdout.strip())
-                self.set_var(node.alias, module_info)
-            else:
-                raise KoCompileError(f"Import.java failed: {result.stderr.strip()}")
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
-            self.set_var(node.alias, {"module": node.module_name, "alias": node.alias, "scopeTag": node.scope_tag})
+            if result.returncode != 0:
+                raise KoCompileError(f"javac failed: {result.stderr.strip()}")
+        result = subprocess.run(
+            ["java", "-cp", compiler_dir, "Import",
+             node.module_name, node.alias, node.scope_tag],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            raise KoCompileError(f"Import.java failed: {result.stderr.strip()}")
+        try:
+            module_info = json.loads(result.stdout.strip())
+        except json.JSONDecodeError:
+            raise KoCompileError(f"Import.java returned invalid JSON: {result.stdout.strip()}")
+        self.set_var(node.alias, module_info)
 
     def visit_WhileLoop(self, node: WhileLoop):
         for _ in range(MAX_LOOP_ITERATIONS):
@@ -1553,30 +1575,36 @@ class KoInterpreter:
                     self.visit(stmt)
 
     def _try_loop_engine(self, var_name, start, end, step, body):
+        import subprocess
+        import tempfile
+        compiler_dir = os.path.dirname(os.path.abspath(__file__))
+        loop_engine = os.path.join(compiler_dir, "LoopEngine")
+        if not os.path.exists(loop_engine):
+            loop_cpp = os.path.join(compiler_dir, "Loop.cpp")
+            if not os.path.exists(loop_cpp):
+                raise KoCompileError(f"LoopEngine binary not found and Loop.cpp source not available at {loop_cpp}")
+            result = subprocess.run(
+                ["g++", "-std=c++11", "-O2", loop_cpp, "-o", loop_engine],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                raise KoCompileError(f"g++ failed to compile Loop.cpp: {result.stderr.strip()}")
+        body_file = None
         try:
-            import tempfile
-            compiler_dir = os.path.dirname(os.path.abspath(__file__))
-            loop_engine = os.path.join(compiler_dir, "LoopEngine")
-            if not os.path.exists(loop_engine):
-                return None
-            body_file = None
-            try:
-                body_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
-                for stmt in body:
-                    body_file.write(f"visit({stmt.__class__.__name__})\n")
-                body_file.close()
-                result = subprocess.run(
-                    [loop_engine, var_name, str(start), str(end), str(step), body_file.name, "1"],
-                    capture_output=True, text=True, timeout=5
-                )
-                if result.returncode == 0:
-                    return result.stdout.strip()
-            finally:
-                if body_file and os.path.exists(body_file.name):
-                    os.unlink(body_file.name)
-        except Exception:
-            pass
-        return None
+            body_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False)
+            for stmt in body:
+                body_file.write(f"visit({stmt.__class__.__name__})\n")
+            body_file.close()
+            result = subprocess.run(
+                [loop_engine, var_name, str(start), str(end), str(step), body_file.name, "1"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode != 0:
+                raise KoCompileError(f"LoopEngine failed: {result.stderr.strip()}")
+            return result.stdout.strip()
+        finally:
+            if body_file and os.path.exists(body_file.name):
+                os.unlink(body_file.name)
 
     def visit_ForLoop(self, node: ForLoop):
         start = self.visit(node.start)
@@ -1861,11 +1889,16 @@ class KoInterpreter:
 
     @staticmethod
     def _handle_len(ko_self, args, node):
-        if args:
-            val = args[0]
-            if isinstance(val, (str, bytes, list, tuple, dict)):
-                return len(val)
+        if not args:
             return 0
+        val = args[0]
+        if val is None:
+            return 0
+        if isinstance(val, (str, bytes, list, tuple, dict)):
+            try:
+                return min(len(val), 1073741824)
+            except Exception:
+                return 0
         return 0
 
     _call_handlers = {
