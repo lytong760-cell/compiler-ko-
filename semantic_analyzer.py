@@ -190,6 +190,7 @@ class SemanticAnalyzer:
         private_methods: Dict[str, IRFunction] = {}
 
         old_class = self.current_class
+        qualified_name = self._qualified_name(cls.name)
         self.current_class = cls.name
 
         for stmt in cls.body:
@@ -213,7 +214,6 @@ class SemanticAnalyzer:
             private_fields=private_fields,
             private_methods=private_methods
         )
-        qualified_name = self._qualified_name(cls.name)
         ir_module.classes[qualified_name] = ir_class
         self.current_class = old_class
 
@@ -282,12 +282,18 @@ class SemanticAnalyzer:
             self._analyze_while_loop(stmt, scope, ir_module)
         elif isinstance(stmt, FuncDecl):
             # Register nested function in current scope (lexical scoping / closures supported)
-            scope.define_func(stmt.name, stmt)
-            self._analyze_function(stmt, ir_module)
+            if stmt.name in scope.functions:
+                self._error(f"Duplicate function declaration '{stmt.name}'", 0)
+            else:
+                scope.define_func(stmt.name, stmt)
+                self._analyze_function(stmt, ir_module)
         elif isinstance(stmt, ClassDecl):
             # Register nested class in current scope
-            scope.define_class(stmt.name, stmt)
-            self._analyze_class(stmt, ir_module)
+            if stmt.name in scope.classes:
+                self._error(f"Duplicate class declaration '{stmt.name}'", 0)
+            else:
+                scope.define_class(stmt.name, stmt)
+                self._analyze_class(stmt, ir_module)
         elif isinstance(stmt, Call):
             self._analyze_call(stmt, scope, ir_module)
         elif isinstance(stmt, CatchStmt):

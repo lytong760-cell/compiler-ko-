@@ -2222,6 +2222,7 @@ class IRBuilder:
         private_methods = {}
 
         old_class = self.current_class
+        qualified_name = self._qualified_name(cls.name)
         self.current_class = cls.name
 
         for stmt in cls.body:
@@ -2245,7 +2246,7 @@ class IRBuilder:
             private_fields=private_fields,
             private_methods=private_methods
         )
-        self.module.classes[cls.name] = class_ir
+        self.module.classes[qualified_name] = class_ir
         self.current_class = old_class
 
     def _build_method_ir(self, func):
