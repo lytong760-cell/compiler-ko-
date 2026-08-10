@@ -98,7 +98,7 @@ Source (.ko) → KoLexer → KoParser → AST (Program) → KoInterpreter (direc
                                     → SemanticAnalyzer (type checking, scope resolution)
 ```
 
-The interpreter is the primary execution path. The code generator (`KoCodeGenerator`), IR builder (`IRBuilder`), optimizer (`Optimizer`), and `SemanticAnalyzer` are fully integrated into the compilation pipeline for IR generation, optimization, and semantic validation.
+The interpreter is the primary execution path. The code generator (`KoCodeGenerator`) remains secondary and is not part of the primary execution flow. The IR builder (`IRBuilder`), optimizer (`Optimizer`), and `SemanticAnalyzer` run conditionally when `enable_optimization` is enabled for IR generation, optimization, and semantic validation.
 
 ### Key Classes
 
@@ -121,6 +121,11 @@ The interpreter includes source-level security validation:
 - **Allowed URL schemes**: Only `http://` and `https://` are permitted
 - **Dangerous function detection**: `exec()`, `eval()`, `__import__()`, `subprocess`, `os.system`, `shutil`, `pickle`, `shelve` are blocked
 - **Path traversal detection**: `..` in import/file-open contexts is blocked
+
+## Semantic Validation
+
+The `SemanticAnalyzer` performs static checks before execution:
+
 - **Duplicate declaration detection**: Nested and global duplicate function/class declarations are detected and reported as semantic errors
 
 ## Testing
