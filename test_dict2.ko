@@ -1,4 +1,0 @@
-[
-    (1{'a'}, 2{'b'})~dic
-    <printf>^("dic{a} = {dic{a}}, dic{b} = {dic{'b'}}\n")
-]

@@ -1,7 +1,24 @@
 from __future__ import annotations
 
+"""Compiler and interpreter for the .ko programming language (v2.800).
+
+Architecture:
+    Source (.ko) -> KoLexer -> KoParser -> AST (Program) -> KoInterpreter
+                                    -> IRBuilder -> IR module (for optimizer)
+
+Subsystems:
+    - Import.java: Java-based import subsystem (tried first, falls back to Python)
+    - Loop.cpp: C++ loop optimization subsystem (tried first, falls back to Python)
+
+Key Features:
+    - Sigil syntax: ~variable, ~function, ~ClassName~instance
+    - System tags: <printf>, <input>, <memory>, <now>, <catch>, <encode>, etc.
+    - Collections: tuples (), dicts {}, nested indexing <index> and {key}
+    - Exception handling: <catch>(`ErrorCode`) [ ... ]
+    - Memory management: <memory>^var, <memory>dete(var)
+"""
+
 import argparse
-import ast
 import enum
 import os
 import re
@@ -10,14 +27,60 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 class KoCompileError(Exception):
-    def __init__(self, message: str, line: int = 0, column: int = 0):
-        super().__init__(f"{message} at line {line}, column {column}")
+    """Compiler error with line/column context and optional source snippet."""
+    def __init__(self, message: str, line: int = 0, column: int = 0, source: str = ""):
         self.message = message
         self.line = line
         self.column = column
+        self.source = source
+        context = self._context_snippet()
+        if context:
+            super().__init__(f"{message} at line {line}, column {column}\n  {context}")
+        else:
+            super().__init__(f"{message} at line {line}, column {column}")
+
+    def _context_snippet(self) -> str:
+        if not self.source or self.line <= 0:
+            return ""
+        lines = self.source.splitlines()
+        if self.line > len(lines):
+            return ""
+        line_idx = max(0, self.line - 3)
+        snippet_lines = lines[line_idx:self.line + 2]
+        result = []
+        for i, l in enumerate(snippet_lines):
+            lineno = line_idx + i + 1
+            marker = ">>>" if lineno == self.line else "   "
+            result.append(f"{marker} {lineno}: {l}")
+        return "\n".join(result)
 
 
 class TokenType(enum.Enum):
+    """Enumeration of all token types in the .ko language.
+
+    Categories:
+        - Literals: INT, FREAL, STRING, TRUE, FALSE
+        - Identifiers: ID, TILDE, DOLLAR, BANG
+        - Delimiters: LPAREN, RPAREN, LBRACKET, RBRACKET, LBRACE, RBRACE
+        - Operators: PLUS, MINUS, STAR, SLASH, PERCENT, AND, OR, EQ, NE, GT, LT, GE, LE
+        - System tags: IF, ELIF, ELSE, RETURN, CATCH, MEMORY, NOW, PRINT, PRINTF, INPUT, ENCODE, LEN
+        - Keywords: LOOP, IMPORT, CLASS, PRIVATE, LOOP_CTRL, ALSO
+        - Punctuation: COMMA, COLON, CARET, RANGLE, LANGLE, BACKTICK, ASSIGN, ASSIGN_INPUT, EOF
+    """
+    """Token types for the .ko lexer.
+
+    Categories:
+    - Literals: INT, FREAL, STRING, BOOL, BYTE, ID
+    - Keywords: IMPORT, LOOP, CLASS, PRIVATE, LOOP_CTRL, ALSO,
+                IF, ELIF, ELSE, RETURN, CATCH, MEMORY, NOW,
+                PRINT, PRINTF, INPUT, FOR, WHILE_ALSO, ENCODE, LEN
+    - Sigils & Delimiters: TILDE, DOLLAR, LBRACKET, RBRACKET,
+                           LPAREN, RPAREN, LBRACE, RBRACE,
+                           LANGLE, RANGLE, COMMA, BACKTICK, COLON,
+                           CARET, BANG, ASSIGN, ASSIGN_INPUT
+    - Operators: PLUS, MINUS, STAR, SLASH, PERCENT, AND, OR,
+                 GT, GE, LE, EQ, NE
+    """
     # Literals
     INT = "INT"
     FREAL = "FREAL"
@@ -86,6 +149,7 @@ class TokenType(enum.Enum):
 
 @dataclass
 class Token:
+    """A single token produced by the lexer with type, value, and position."""
     type: TokenType
     value: Any
     line: int
@@ -93,6 +157,27 @@ class Token:
 
 
 class KoLexer:
+    """Tokenizer for .ko source code.
+
+    Converts raw source text into a stream of Token objects.
+    Handles multi-character operators, string literals with brace interpolation,
+    system tags, boolean literals, numeric literals, identifiers, keywords,
+    sigils, delimiters, and comments.
+
+    Attributes:
+        source: Raw source string to tokenize.
+        pos: Current position in source.
+        line: Current line number (1-indexed).
+        column: Current column number (1-indexed).
+        tokens: List of produced Token objects.
+        quote_stack: Stack tracking open string literals and brace depth for interpolation.
+    """
+    """Tokenizer for .ko source code.
+
+    Converts raw source text into a stream of Token objects.
+    Handles string literals with brace-interpolation, system tags,
+    boolean literals, numeric literals, identifiers, and operators.
+    """
     def __init__(self, source: str):
         self.source = source
         self.pos = 0
@@ -102,7 +187,7 @@ class KoLexer:
         self.quote_stack = []  # Stack of (quote_char, brace_depth) tuples
 
     def _error(self, message: str):
-        raise KoCompileError(message, self.line, self.column)
+        raise KoCompileError(message, self.line, self.column, self.source)
 
     def _peek(self, offset: int = 0) -> str:
         if self.pos + offset >= len(self.source):
@@ -120,6 +205,18 @@ class KoLexer:
         return char
 
     def tokenize(self) -> List[Token]:
+        """Convert source string into a list of Token objects.
+
+        Handles:
+        - Multi-character operators (&&, %%, &=, ==, !=, >=, <=)
+        - String literals with brace-interpolation for printf
+        - System tags (<print>, <printf>, <if>, <for>, etc.)
+        - Boolean literals (\\True\\, \\False\\)
+        - Numeric literals (int, freal)
+        - Identifiers and keywords
+        - Sigils and delimiters
+        - Comments (|...|)
+        """
         while self.pos < len(self.source):
             char = self._peek()
 
@@ -232,6 +329,10 @@ class KoLexer:
                 continue
 
             if char == "\\":
+                if self.quote_stack:
+                    quote = self.quote_stack[-1][0]
+                    self._tokenize_string_fragment(quote, continuation=True)
+                    continue
                 start_col = self.column
                 self._advance()
                 text = ""
@@ -271,9 +372,16 @@ class KoLexer:
                 elif char == "!":
                     text += self._advance()
                     while self._peek().isalpha(): text += self._advance()
-                # Keep IDs together if they contain sigils in the middle (like @app_server)
-                while self._peek().isalnum() or self._peek() in "_@":
+                else:
                     text += self._advance()
+                # Keep IDs together if they contain sigils in the middle (like @app_server)
+                while self._peek() and (self._peek().isalnum() or self._peek() in {"_", "@"}):
+                    text += self._advance()
+                
+                if text == "x" and self._peek() in ('"', "'"):
+                    quote = self._advance()
+                    self._tokenize_string_fragment(quote, raw=True)
+                    continue
                 
                 kw_map = {
                     "!class": TokenType.CLASS,
@@ -342,23 +450,32 @@ class KoLexer:
         self.tokens.append(Token(TokenType.EOF, None, self.line, self.column))
         return self.tokens
 
-    def _tokenize_string_fragment(self, quote: str, continuation: bool = False):
+    def _tokenize_string_fragment(self, quote: str, continuation: bool = False, raw: bool = False):
         start_col = self.column
         content = ""
         brace_depth = 0
         while self._peek() and self._peek() != quote:
             if self._peek() == "{" and brace_depth == 0:
-                if content:
-                    self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
-                self.tokens.append(Token(TokenType.LBRACE, "{", self.line, self.column))
-                self._advance()
-                self.quote_stack.append((quote, 1))
-                return
-            elif self._peek() == "{":
+                if self._peek(1) == "{":
+                    content += "{"
+                    self._advance(); self._advance()
+                else:
+                    if content:
+                        self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
+                    self.tokens.append(Token(TokenType.LBRACE, "{", self.line, self.column))
+                    self._advance()
+                    self.quote_stack.append((quote, 1))
+                    return
+            elif self._peek() == "{" and brace_depth > 0:
                 brace_depth += 1
                 content += self._advance()
             elif self._peek() == "}" and brace_depth == 0:
                 if continuation:
+                    if self._peek(1) == "}":
+                        self.tokens.append(Token(TokenType.STRING, "}", self.line, self.column))
+                        self._advance(); self._advance()
+                        start_col = self.column
+                        continue
                     if content:
                         self.tokens.append(Token(TokenType.STRING, content, self.line, start_col))
                     self.tokens.append(Token(TokenType.RBRACE, "}", self.line, self.column))
@@ -366,27 +483,37 @@ class KoLexer:
                     start_col = self.column
                     continue
                 else:
-                    content += self._advance()
+                    if self._peek(1) == "}":
+                        content += "}"
+                        self._advance(); self._advance()
+                    else:
+                        content += self._advance()
             elif self._peek() == "}" and brace_depth > 0:
                 brace_depth -= 1
                 content += self._advance()
             elif self._peek() == ">" and brace_depth == 0:
                 content += self._advance()
             elif self._peek() == "\\":
-                self._advance()
-                next_char = self._advance()
-                if next_char == "n":
-                    content += "\n"
-                elif next_char == "t":
-                    content += "\t"
-                elif next_char == "r":
-                    content += "\r"
-                elif next_char == "\\":
-                    content += "\\"
-                elif next_char == '"':
-                    content += '"'
+                if raw:
+                    content += self._advance()
+                    if self._peek() and self._peek() != quote:
+                        content += self._advance()
                 else:
-                    content += "\\" + next_char
+                    self._advance()
+                    next_char = self._advance()
+                    if next_char == "n":
+                        content += "\n"
+                    elif next_char == "t":
+                        content += "\t"
+                    elif next_char == "r":
+                        content += "\r"
+                    elif next_char == "\\":
+                        content += "\\"
+                    elif next_char == '"':
+                        content += '"'
+                    else:
+                        content += "\\" + next_char
+                    self.column += 1
             else:
                 content += self._advance()
 
@@ -466,6 +593,10 @@ class NowMutation(Stmt):
     target: Identifier
 
 @dataclass
+class ExprStmt(Stmt):
+    expr: Expr
+
+@dataclass
 class IfStmt(Stmt):
     condition: Expr
     body: List[Stmt]
@@ -520,14 +651,21 @@ class Program(Node):
 
 
 class KoParser:
-    def __init__(self, tokens: List[Token]):
+    """Recursive descent parser for .ko token streams.
+
+    Produces an AST conforming to the v2.800 specification.
+    Handles expressions, statements, function/class declarations,
+    control flow, exception handling, and system tags.
+    """
+    def __init__(self, tokens: List[Token], source: str = ""):
         self.tokens = tokens
         self.pos = 0
         self._dict_literal_depth = 0
+        self.source = source
 
     def _error(self, message: str):
         token = self._peek()
-        raise KoCompileError(message, token.line, token.column)
+        raise KoCompileError(message, token.line, token.column, self.source)
 
     def _peek(self, offset: int = 0) -> Token:
         if self.pos + offset >= len(self.tokens):
@@ -555,6 +693,14 @@ class KoParser:
         self._error(message)
 
     def parse(self) -> Program:
+        """Parse the complete token stream into a Program AST node.
+
+        Processes top-level imports, class declarations, function declarations,
+        and the main block. Collects catch blocks for global exception handling.
+
+        Returns:
+            Program node containing all top-level declarations and the main block.
+        """
         imports = []
         decls = []
         main = None
@@ -661,6 +807,18 @@ class KoParser:
         return MainBlock(body)
 
     def parse_catch(self) -> CatchStmt:
+        """Parse a catch block for exception handling.
+
+        Grammar:
+            <catch> LPAREN BACKTICK error_code BACKTICK RPAREN LBRACKET statements RBRACKET
+            <catch> LPAREN expression RPAREN LBRACKET statements RBRACKET
+
+        The error_code is a .ko error code (e.g., `DivideByZeroError`).
+        The expression form allows condition-based catching.
+
+        Returns:
+            CatchStmt node with error condition and handler body.
+        """
         self._consume(TokenType.CATCH, "Expected <catch>")
         self._consume(TokenType.LPAREN, "Expected (")
         
@@ -681,6 +839,12 @@ class KoParser:
         return CatchStmt(condition, body)
 
     def parse_statement(self) -> Stmt:
+        """Parse a single statement from the token stream.
+
+        Dispatches to specific parsers based on the leading token.
+        Supports control flow, memory ops, encoding, I/O, expressions,
+        and declaration statements.
+        """
         if self._check(TokenType.IF):
             return self.parse_if()
         elif self._check(TokenType.CATCH):
@@ -718,6 +882,11 @@ class KoParser:
                 return self._parse_id_lparen_statement()
             elif self._peek(1).type == TokenType.LBRACKET:
                 return self.parse_function()
+            elif self._peek(1).type == TokenType.CLASS:
+                return self.parse_class()
+            elif self._peek(1).type in (TokenType.LANGLE, TokenType.LBRACE):
+                expr = self.parse_expression()
+                return ExprStmt(expr)
         
         self._error(f"Unexpected statement: {self._peek().type}")
 
@@ -792,8 +961,14 @@ class KoParser:
         self._consume(TokenType.RPAREN, "Expected )")
         self._consume(TokenType.TILDE, "Expected ~")
         name = self._consume(TokenType.ID, "Expected variable name").value
-        # Build a TupleLiteral as the initializer
-        initializer = TupleLiteral(elements) if len(elements) > 1 else elements[0] if elements else Literal(None)
+        # Build a TupleLiteral as the initializer, or merge dict-like elements
+        if len(elements) > 1 and all(isinstance(e, DictLiteral) for e in elements):
+            merged = {}
+            for e in elements:
+                merged.update(e.mapping)
+            initializer = DictLiteral(merged)
+        else:
+            initializer = TupleLiteral(elements) if len(elements) > 1 else elements[0] if elements else Literal(None)
         return VarDecl("", initializer, name)
 
     def parse_dict_decl(self) -> VarDecl:
@@ -838,6 +1013,14 @@ class KoParser:
             return self.parse_var_decl()
 
     def parse_var_decl(self) -> VarDecl:
+        """Parse a variable declaration: type(expr)~name.
+
+        Grammar:
+            type_name LPAREN expression RPAREN TILDE ID
+
+        Returns:
+            VarDecl node with type, initializer expression, and variable name.
+        """
         type_name = self._consume(TokenType.ID, "Expected type name").value
         self._consume(TokenType.LPAREN, "Expected (")
         initializer = self.parse_expression(stop_tokens=[TokenType.RPAREN])
@@ -847,6 +1030,15 @@ class KoParser:
         return VarDecl(type_name, initializer, name)
 
     def parse_if(self) -> IfStmt:
+        """Parse an if/elif/else control flow statement.
+
+        Grammar:
+            <if> LPAREN expression RPAREN LBRACKET statements RBRACKET
+            [ <elif> ... ] [ <else> ... ]
+
+        Returns:
+            IfStmt node with condition, body, and optional else body.
+        """
         self._consume(TokenType.IF, "Expected <if>")
         self._consume(TokenType.LPAREN, "Expected (")
         condition = self.parse_expression(stop_tokens=[TokenType.RPAREN])
@@ -894,6 +1086,17 @@ class KoParser:
         return body
 
     def parse_for(self) -> ForLoop:
+        """Parse a for loop statement using the Loop.cpp optimized subsystem.
+
+        Grammar:
+            **Loop** <for> LPAREN TILDE ID ASSIGN expression [ LPAREN expression RPAREN ] RPAREN LBRACKET statements RBRACKET
+
+        The loop body is executed via the Loop.cpp C++ subsystem when available,
+        falling back to Python range() iteration.
+
+        Returns:
+            ForLoop node with variable name, start, end, step, and body.
+        """
         self._consume(TokenType.LOOP, "Expected **Loop**")
         self._consume(TokenType.FOR, "Expected <for>")
         self._consume(TokenType.LPAREN, "Expected (")
@@ -921,6 +1124,17 @@ class KoParser:
         return ForLoop(var_name, start, end, body, step)
 
     def parse_while(self) -> WhileLoop:
+        """Parse a while loop statement using the Loop.cpp optimized subsystem.
+
+        Grammar:
+            @loop(condition) **Loop** <for.f.whle>@also [ statements ]
+
+        The loop body is executed via the Loop.cpp C++ subsystem when available,
+        falling back to Python while loop with iteration limit.
+
+        Returns:
+            WhileLoop node with condition expression and body statements.
+        """
         # @loop(cond) **Loop** <for.f.whle>@also [ ... ]
         self._consume(TokenType.LOOP_CTRL, "Expected @loop")
         self._consume(TokenType.LPAREN, "Expected (")
@@ -948,6 +1162,10 @@ class KoParser:
         return NowMutation(expr, Identifier(target))
 
     def parse_expression(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
+        """Parse an expression, stopping at any token in stop_tokens.
+
+        Entry point for expression parsing; delegates to logical-or level.
+        """
         return self.parse_logical_or(stop_tokens)
 
     def parse_logical_or(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
@@ -968,8 +1186,10 @@ class KoParser:
 
     def parse_comparison(self, stop_tokens: Optional[List[TokenType]] = None) -> Expr:
         expr = self.parse_term(stop_tokens)
+        if stop_tokens and self._peek().type in stop_tokens:
+            return expr
         while True:
-            if self._check_any(TokenType.GT, TokenType.GE, TokenType.LE, TokenType.EQ, TokenType.NE):
+            if self._check_any(TokenType.GT, TokenType.GE, TokenType.LE, TokenType.EQ, TokenType.NE, TokenType.RANGLE):
                 op = self._peek().type
                 if stop_tokens and op in stop_tokens:
                     break
@@ -1037,17 +1257,20 @@ class KoParser:
         # Handle suffixes: indexing <index> and method calls $instance~method()
         while True:
             next_token = self._peek()
-            if next_token.type == TokenType.LANGLE and (stop_tokens is None or TokenType.LANGLE not in stop_tokens) and next_token.line == self.tokens[self.pos-1].line and next_token.column == self.tokens[self.pos-1].column + len(str(self.tokens[self.pos-1].value)):
-                # target<index> with no space
+            if next_token.type in (TokenType.LANGLE, TokenType.RANGLE) and (stop_tokens is None or next_token.type not in stop_tokens) and next_token.line == self.tokens[self.pos-1].line and next_token.column == self.tokens[self.pos-1].column + len(str(self.tokens[self.pos-1].value)):
+                # target<index> with no space, or > closing an index bracket
+                is_close = next_token.type == TokenType.RANGLE
                 self._advance()
-                indices = []
-                while True:
-                    # Index expressions should stop at > or another <
-                    indices.append(self.parse_expression(stop_tokens=[TokenType.RANGLE, TokenType.LANGLE]))
-                    if not self._match(TokenType.LANGLE):
-                        break
-                self._consume(TokenType.RANGLE, "Expected >")
-                expr = Indexing(expr, indices)
+                if is_close:
+                    expr = Indexing(expr, [])
+                else:
+                    indices = []
+                    while True:
+                        indices.append(self.parse_expression(stop_tokens=[TokenType.RANGLE, TokenType.LANGLE]))
+                        if not self._match(TokenType.LANGLE):
+                            break
+                    self._consume(TokenType.RANGLE, "Expected >")
+                    expr = Indexing(expr, indices)
             elif next_token.type == TokenType.LBRACE and (stop_tokens is None or TokenType.LBRACE not in stop_tokens) and next_token.line == self.tokens[self.pos-1].line and next_token.column == self.tokens[self.pos-1].column + len(str(self.tokens[self.pos-1].value)):
                 # Dictionary key access: expr{key}
                 self._advance()
@@ -1057,8 +1280,10 @@ class KoParser:
                 finally:
                     self._dict_literal_depth -= 1
                 self._consume(TokenType.RBRACE, "Expected }")
+                if isinstance(key, Identifier):
+                    key = Literal(key.name)
                 if isinstance(expr, Literal) and self._dict_literal_depth == 0:
-                    expr = DictLiteral({expr: key})
+                    expr = DictLiteral({key: expr})
                 else:
                     expr = Indexing(expr, [key])
             elif self._match(TokenType.DOLLAR):
@@ -1110,6 +1335,13 @@ class KoParser:
         
         if self._match(TokenType.ID):
             return Identifier(self.tokens[self.pos-1].value)
+        
+        if self._check(TokenType.MEMORY):
+            self._advance()
+            target = None
+            if self._match(TokenType.CARET):
+                target = self._consume(TokenType.ID, "Expected identifier after ^").value
+            return Call("memory_addr", [Identifier(target)] if target else [])
         
         if self._check(TokenType.LANGLE):
             return self.parse_system_tag_or_index(stop_tokens)
@@ -1163,6 +1395,11 @@ class KoParser:
                 if self._peek().type == TokenType.TILDE:
                     return TupleLiteral(elements)
                 return elements[0]
+            if all(isinstance(e, DictLiteral) for e in elements):
+                merged = {}
+                for e in elements:
+                    merged.update(e.mapping)
+                return DictLiteral(merged)
             return TupleLiteral(elements)
 
         self._error(f"Expected expression, found {self._peek().type}")
@@ -1233,6 +1470,19 @@ class KoParser:
         self._error("Invalid memory operation")
 
     def parse_print(self) -> Stmt:
+        """Parse a print or printf statement.
+
+        Grammar for <print>:
+            <print> type ^ LPAREN expression RPAREN
+
+        Grammar for <printf>:
+            <printf> ^ LPAREN format_string [ , expression ... ] RPAREN
+
+        Format strings support {expr} interpolation for expressions.
+
+        Returns:
+            Call node representing the print/printf operation.
+        """
         is_printf = self._peek().type == TokenType.PRINTF
         self._advance() # Consume <print> or <printf>
         
@@ -1347,6 +1597,11 @@ class KoParser:
 
 
 class KoInterpreter:
+    """Tree-walking interpreter for .ko AST programs.
+
+    Manages lexical scoping, function/class dispatch, exception handling,
+    and cross-language subsystem integration (Import.java, Loop.cpp).
+    """
     def __init__(self, program: Program):
         self.program = program
         self.scopes = [{}]
@@ -1363,12 +1618,34 @@ class KoInterpreter:
         self.scopes.pop()
     
     def get_var(self, name):
+        """Look up a variable by name in the scope chain.
+
+        Searches from innermost to outermost scope. Raises NameError if not found.
+
+        Args:
+            name: Variable name to look up.
+
+        Returns:
+            Value of the variable.
+
+        Raises:
+            NameError: If the variable is not defined in any accessible scope.
+        """
         for scope in reversed(self.scopes):
             if name in scope:
                 return scope[name]
         raise NameError(f"Name '{name}' is not defined")
     
     def set_var(self, name, value):
+        """Set a variable by name in the scope chain.
+
+        Updates the variable in the innermost scope where it is already defined,
+        or creates it in the current (innermost) scope if not found.
+
+        Args:
+            name: Variable name to set.
+            value: Value to assign.
+        """
         for scope in reversed(self.scopes):
             if name in scope:
                 scope[name] = value
@@ -1376,10 +1653,13 @@ class KoInterpreter:
         self.scopes[-1][name] = value
 
     def run(self):
+        """Execute the program: process global declarations, imports, then main block."""
         for decl in self.program.decls:
             if isinstance(decl, FuncDecl):
                 self.functions[decl.name] = decl
             elif isinstance(decl, ClassDecl):
+                self.visit(decl)
+            elif isinstance(decl, VarDecl):
                 self.visit(decl)
         
         for imp in self.program.imports:
@@ -1397,22 +1677,27 @@ class KoInterpreter:
         raise NotImplementedError(f"No visit_{node.__class__.__name__} method")
 
     def visit_MainBlock(self, node: MainBlock):
+        """Execute the main entry block with scoped exception handling."""
         self.push_scope()
         catch_blocks = self._collect_catch_blocks(node.body)
         global_catch_blocks = self.program.catch_blocks
         all_catch_blocks = catch_blocks + global_catch_blocks
-        for stmt in node.body:
-            try:
-                self.visit(stmt)
-            except ReturnException as e:
-                self.pop_scope()
-                return e.value
-            except KeyNotFoundError as exc:
-                self._handle_catch_in_scope("KeyNotFoundError", exc, all_catch_blocks)
-            except Exception as exc:
-                error_type = type(exc).__name__
-                mapped = self._map_python_error(error_type)
-                self._handle_catch_in_scope(mapped, exc, all_catch_blocks)
+        try:
+            for stmt in node.body:
+                try:
+                    self.visit(stmt)
+                except ReturnException as e:
+                    self.pop_scope()
+                    return e.value
+                except KeyNotFoundError as exc:
+                    self._handle_catch_in_scope("KeyNotFoundError", exc, all_catch_blocks)
+                except Exception as exc:
+                    error_type = type(exc).__name__
+                    mapped = self._map_python_error(error_type)
+                    self._handle_catch_in_scope(mapped, exc, all_catch_blocks)
+        except ReturnException as e:
+            self.pop_scope()
+            return e.value
         self.pop_scope()
 
     def _map_python_error(self, error_type: str) -> str:
@@ -1514,10 +1799,53 @@ class KoInterpreter:
         self.classes[class_name] = new_class
 
     def visit_FuncDecl(self, node: FuncDecl) -> None:
-        # Register function for global lookup and local access
+        """Register a function declaration with lexical closure support."""
+        # Always register in global function table for direct lookup
         self.functions[node.name] = node
-        # Also store in current scope to support nested/local function declarations
-        self.set_var(node.name, node)
+        
+        # If inside an active scope, also expose a closure so nested/lexical
+        # calls resolve through the enclosing scope chain instead of only the
+        # flat global function table.
+        if len(self.scopes) > 1:
+            captured_scopes = [dict(scope) for scope in self.scopes]
+
+            def _make_closure(func_node):
+                def _call_closure(*call_args):
+                    self._recursion_depth += 1
+                    if self._recursion_depth > MAX_RECURSION_DEPTH:
+                        self._recursion_depth -= 1
+                        raise KoCompileError("Maximum recursion depth exceeded")
+                    old_scopes = self.scopes
+                    self.scopes = [dict(scope) for scope in captured_scopes]
+                    self.push_scope()
+                    for i, param in enumerate(func_node.params):
+                        self.scopes[-1][param.name] = call_args[i] if i < len(call_args) else None
+                    func_catch_blocks = self._collect_catch_blocks(func_node.body)
+                    try:
+                        for stmt in func_node.body:
+                            try:
+                                self.visit(stmt)
+                            except ReturnException as e:
+                                self.scopes = old_scopes
+                                self._recursion_depth -= 1
+                                return e.value
+                            except KeyNotFoundError as exc:
+                                self._handle_catch_in_scope("KeyNotFoundError", exc, func_catch_blocks)
+                            except Exception as exc:
+                                error_type = type(exc).__name__
+                                mapped = self._map_python_error(error_type)
+                                self._handle_catch_in_scope(mapped, exc, func_catch_blocks)
+                    except ReturnException as e:
+                        self.scopes = old_scopes
+                        self._recursion_depth -= 1
+                        return e.value
+                    self.scopes = old_scopes
+                    self._recursion_depth -= 1
+                    return None
+                return _call_closure
+
+            closure = _make_closure(node)
+            self.set_var(node.name, closure)
 
     def visit_CatchStmt(self, node: CatchStmt):
         # Register catch block with current scope for dynamic exception handling
@@ -1528,6 +1856,11 @@ class KoInterpreter:
         scope["_catch_blocks"].append(node)
 
     def visit_ImportStmt(self, node: ImportStmt) -> None:
+        """Execute an Import statement via the Import.java subsystem.
+
+        Dynamically compiles Import.java if needed, then runs it via
+        subprocess to resolve the module and ingest its scope table.
+        """
         import json
         import subprocess
         compiler_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1554,6 +1887,10 @@ class KoInterpreter:
         self.set_var(node.alias, module_info)
 
     def visit_WhileLoop(self, node: WhileLoop):
+        """Execute a while loop, delegating optimization to Loop.cpp."""
+        loop_report = self._try_loop_engine("while", 0, 0, 1, node.body)
+        if loop_report:
+            self._loop_optimization_reports.append(loop_report)
         for _ in range(MAX_LOOP_ITERATIONS):
             if not self.visit(node.condition):
                 break
@@ -1607,6 +1944,7 @@ class KoInterpreter:
                 os.unlink(body_file.name)
 
     def visit_ForLoop(self, node: ForLoop):
+        """Execute a for loop, delegating optimization to Loop.cpp."""
         start = self.visit(node.start)
         end = self.visit(node.end)
         step = self.visit(node.step) if node.step else 1
@@ -1653,6 +1991,18 @@ class KoInterpreter:
             self._recursion_depth -= 1
             raise KoCompileError(f"Maximum recursion depth ({MAX_RECURSION_DEPTH}) exceeded")
         try:
+            scope_func = None
+            if isinstance(node.name, str):
+                for scope in reversed(self.scopes):
+                    if node.name in scope:
+                        candidate = scope[node.name]
+                        if callable(candidate):
+                            scope_func = candidate
+                            break
+            if scope_func is not None:
+                result = scope_func(*args)
+                self._recursion_depth -= 1
+                return result
             if node.name in self.functions:
                 func = self.functions[node.name]
                 self.push_scope()
@@ -1710,7 +2060,13 @@ class KoInterpreter:
 
     @staticmethod
     def _handle_memory_addr(ko_self, args, node):
-        return id(args[0]) if args else None
+        if args:
+            value = args[0]
+            if value is None:
+                return "0x0"
+            addr = id(value)
+            return f"0x{addr:x}"
+        return "0x0"
 
     @staticmethod
     def _handle_memory_free(ko_self, args, node):
@@ -1720,6 +2076,11 @@ class KoInterpreter:
                 ko_self.set_var(var_name, None)
             except NameError:
                 pass
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
         return None
 
     @staticmethod
@@ -1784,7 +2145,13 @@ class KoInterpreter:
 
     @staticmethod
     def _handle_web_domain(ko_self, args, node):
-        return args[0] if args else ""
+        if args:
+            domain = str(args[0])
+            target = node.target if node.target else None
+            if target:
+                ko_self.set_var(target, domain)
+            return domain
+        return ""
 
     @staticmethod
     def _handle_web_fetch(ko_self, args, node):
@@ -1926,6 +2293,14 @@ class KoInterpreter:
     }
 
     def visit_VarDecl(self, node: VarDecl):
+        """Execute a variable declaration statement.
+
+        Handles both regular variable initialization and class instantiation
+        (when is_instantiation=True).
+
+        Args:
+            node: VarDecl AST node containing type, initializer, and name.
+        """
         if node.is_instantiation:
             class_name = node.initializer or node.type_name
             if class_name in self.classes:
@@ -1988,6 +2363,9 @@ class KoInterpreter:
     def visit_NowMutation(self, node: NowMutation):
         val = self.visit(node.expr)
         self.set_var(node.target.name, val)
+
+    def visit_ExprStmt(self, node: ExprStmt):
+        self.visit(node.expr)
 
     def visit_Identifier(self, node: Identifier):
         return self.get_var(node.name)
@@ -2520,12 +2898,17 @@ class IRBuilder:
 
 
 def run_ko_source(source: str, file_name: str = "<stdin>", enable_optimization: bool = True) -> None:
+    """Compile and run .ko source code.
+
+    Pipeline: Lexer -> Parser -> [SemanticAnalyzer -> Optimizer] -> Interpreter
+    Subsystems: Import.java (via subprocess), Loop.cpp (via subprocess)
+    """
     if len(source) > MAX_SOURCE_SIZE:
         raise KoCompileError(f"Source file exceeds maximum size of {MAX_SOURCE_SIZE} bytes")
     _validate_source_security(source, file_name)
     lexer = KoLexer(source)
     tokens = lexer.tokenize()
-    parser = KoParser(tokens)
+    parser = KoParser(tokens, source)
     program = parser.parse()
 
     if enable_optimization:
@@ -2547,16 +2930,24 @@ def run_ko_source(source: str, file_name: str = "<stdin>", enable_optimization: 
     except ReturnException as e:
         pass
     except Exception as exc:
-        raise KoCompileError(f"Runtime error: {exc}") from exc
+        import traceback
+        tb = traceback.extract_tb(exc.__traceback__)
+        line = 0
+        for frame in reversed(tb):
+            if frame.filename == file_name or frame.filename == "<stdin>":
+                line = frame.lineno
+                break
+        raise KoCompileError(f"Runtime error: {exc}", line, 0, source) from exc
 
 
 def run_ko_source_with_ir(source: str, file_name: str = "<stdin>") -> Dict[str, Any]:
+    """Compile .ko source and return IR, optimizer report, and semantic analysis results."""
     if len(source) > MAX_SOURCE_SIZE:
         raise KoCompileError(f"Source file exceeds maximum size of {MAX_SOURCE_SIZE} bytes")
     _validate_source_security(source, file_name)
     lexer = KoLexer(source)
     tokens = lexer.tokenize()
-    parser = KoParser(tokens)
+    parser = KoParser(tokens, source)
     program = parser.parse()
 
     from semantic_analyzer import SemanticAnalyzer
