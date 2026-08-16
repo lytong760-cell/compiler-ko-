@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# ko - .ko Language Compiler CLI
+# Usage: ko [options] <file.ko>
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KO_COMPILER="$SCRIPT_DIR/../ko_compiler.py"
+MODULES_DIR="$HOME/.ko/modules"
+export PYTHONPATH="${PYTHONPATH:-}:$SCRIPT_DIR/.."
+
+# Ensure modules directory exists
+mkdir -p "$MODULES_DIR"
+
+# Ensure Import.java is compiled
+if [ -f "$SCRIPT_DIR/../Import.java" ]; then
+    if [ ! -f "$SCRIPT_DIR/../Import.class" ]; then
+        javac "$SCRIPT_DIR/../Import.java" 2>/dev/null || true
+    fi
+fi
+
+show_help() {
+    cat << 'HELP'
+ko - .ko Language Compiler CLI
+
+USAGE:
+    ko [OPTIONS] <file.ko>
+    ko --install <module_name>
+
+OPTIONS:
+    -h, --help      Show this help message
+    --install       Install an external library from ko-studio.ai.studio
+    --version       Show version information
+
+EXAMPLES:
+    ko program.ko                  Run a .ko program
+    ko --install MyLibrary         Install an external library
+    ko --help                      Show help
+
+For more information, visit: https://ko-studio.ai.studio
+HELP
+}
+
+show_version() {
+    echo "ko compiler v2.800"
+    echo "Copyright (c) 2026 ko-studio.ai.studio"
+}
+
+# Parse arguments
+if [ $# -eq 0 ]; then
+    show_help
+    exit 1
+fi
+
+SOURCE_FILE=""
+INSTALL_MODULE=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        --version)
+            show_version
+            exit 0
+            ;;
+        --install)
+            if [ -z "${2:-}" ]; then
+                echo "Error: --install requires a module name" >&2
+                exit 1
+            fi
+            INSTALL_MODULE="$2"
+            shift 2
+            ;;
+        -*)
+            echo "Error: Unknown option $1" >&2
+            show_help >&2
+            exit 1
+            ;;
+        *)
+            SOURCE_FILE="$1"
+            shift
+            ;;
+    esac
+done
+
+# Handle install mode
+if [ -n "$INSTALL_MODULE" ]; then
+    echo "Installing library: $INSTALL_MODULE" >&2
+    python3 "$KO_COMPILER" --install "$INSTALL_MODULE"
+    exit $?
+fi
+
+# Check source file
+if [ -z "$SOURCE_FILE" ]; then
+    echo "Error: No source file specified" >&2
+    show_help >&2
+    exit 1
+fi
+
+if [ ! -f "$SOURCE_FILE" ]; then
+    echo "Error: File not found: $SOURCE_FILE" >&2
+    exit 1
+fi
+
+# Run the compiler
+exec python3 "$KO_COMPILER" "$SOURCE_FILE"

@@ -1,0 +1,6 @@
+[
+    int(1)~a
+    int(2)~b
+    int(a + b)~c
+    <printf>^("Sum is: {c}\n")
+]

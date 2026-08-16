@@ -1,0 +1,15 @@
+#!/bin/bash
+set -e
+mkdir -p "$HOME/.ko/modules"
+if [ ! -f "$HOME/.ko/modules/Random.ko" ]; then
+    echo '# Built-in Random module' > "$HOME/.ko/modules/Random.ko"
+fi
+if [ ! -f "$HOME/.ko/modules/Os.ko" ]; then
+    echo '# Built-in OS module' > "$HOME/.ko/modules/Os.ko"
+fi
+if [ ! -f "$HOME/.ko/modules/Website.ko" ]; then
+    echo '# Built-in Website module' > "$HOME/.ko/modules/Website.ko"
+fi
+chmod +x /usr/local/bin/ko
+echo "ko compiler installed successfully!"
+echo "Run 'ko --help' to get started."

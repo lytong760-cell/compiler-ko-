@@ -1,0 +1,35 @@
+| ========================================================== |
+| Test: Control Flow (if/elif/else) |
+| ========================================================== |
+[
+    | if/elif/else chain |
+    int(85)~hp
+    <if>(hp >= 80) [
+        <printf>^("HP={hp}: Rat khoe\n")
+    ]
+    <elif>(hp >= 30) [
+        <printf>^("HP={hp}: Binh thuong\n")
+    ]
+    <else> [
+        <printf>^("HP={hp}: Nguy hiem!\n")
+    ]
+
+    | if with && and %% |
+    booling(\True\)~is_active
+    int(50)~current_hp
+    <if>(current_hp > 0 && is_active == \True\) [
+        <printf>^("Active and alive!\n")
+    ]
+
+    | if with %% (OR) |
+    int(0)~zero_val
+    <if>(zero_val == 0 %% is_active == \False\) [
+        <printf>^("Zero or inactive condition met\n")
+    ]
+
+    | Nested if |
+    int(100)~score
+    <if>(score >= 90) [
+        <printf>^("Grade: A\n")
+    ]
+]

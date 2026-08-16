@@ -1,0 +1,33 @@
+| ========================================================== |
+| Test: Data Structures (tuples, nested lists, dictionaries, indexing) |
+| ========================================================== |
+[
+    | Tuple / Mảng số |
+    (1, 2, 3)~numbers
+    <printf>^("Tuple: numbers<0>={numbers<0>}, numbers<1>={numbers<1>}, numbers<2>={numbers<2>}\n")
+
+    | Mảng Chuỗi |
+    ('a', 'b', 'c')~letters
+    <printf>^("Letters: letters<0>={letters<0>}, letters<1>={letters<1>}, letters<2>={letters<2>}\n")
+
+    | Danh sách Lồng nhau (Nested List) |
+    (1, ('a', 'b'))~nested_list
+    <printf>^("Nested: nested_list<0>={nested_list<0>}, nested_list<1<0>>={nested_list<1<0>>}\n")
+
+    | Từ điển (Dictionary Key-Value) |
+    (1{'a'})~dic
+    <printf>^("Dict: dic{{'a'}}={dic{'a'}}\n")
+
+    | Dictionary with multiple keys |
+    (1{'name'}, 2{'hp'}, 3{'mp'})~stats
+    <printf>^("Stats: name={stats{'name'}}, hp={stats{'hp'}}, mp={stats{'mp'}}\n")
+
+    | Nested dictionary indexing |
+    (1{'a'})~outer
+    <printf>^("Outer dict: outer{{'a'}}={outer{'a'}}\n")
+
+    | Indexing with expressions |
+    int(1)~idx
+    int(2)~idx2
+    <printf>^("Tuple indexing by var: numbers<idx>={numbers<idx>}\n")
+]

@@ -1,0 +1,12 @@
+safe_divide(int~a, int~b) [
+    int(a / b)~result
+    <return>(result)
+    <catch>(`DivideByZeroError`) [
+        <printf>^("Caught divide by zero!\n")
+        <return>(0)
+    ]
+]
+[
+    int(~safe_divide(10, 0))~r
+    <printf>^("Result: {r}\n")
+]

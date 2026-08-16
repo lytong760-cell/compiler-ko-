@@ -1,0 +1,48 @@
+| ========================================================== |
+| Test: Exception Handling (<catch>) |
+| ========================================================== |
+
+| Function that divides by zero |
+safe_divide(int~a, int~b) [
+    int(a / b)~result
+    int(a % b)~remainder
+    <printf>^("Result: {result}, Remainder: {remainder}\n")
+    <return>(result)
+
+    | Catch inside function - scoped to this function |
+    <catch>(`DivideByZeroError`) [
+        <printf>^("Caught DivideByZeroError inside safe_divide!\n")
+        <return>(0)
+    ]
+]
+
+| Function that could cause other errors |
+ risky_operation(int~val) [
+    int(100 / val)~result
+    <return>(result)
+]
+
+| Global catch blocks - Sequential Upward Catching Rule |
+<catch>(`DivideByZeroError`) [
+    <printf>^("Global catch: DivideByZeroError caught!\n")
+    <return>(0)
+]
+<catch>(`SystemException`) [
+    <printf>^("Global catch: SystemException caught!\n")
+    <return>(-1)
+]
+
+| Main block |
+[
+    | Test division by zero - should be caught by function's internal catch |
+    int(~safe_divide(100, 0))~div_result
+    <printf>^("Division by zero result: {div_result}\n")
+
+    | Test normal division |
+    int(~safe_divide(100, 3))~normal_result
+    <printf>^("Normal division result: {normal_result}\n")
+
+    | Test error dictionary access in catch |
+    int(~safe_divide(10, 0))~div2_result
+    <printf>^("Division by zero result 2: {div2_result}\n")
+]

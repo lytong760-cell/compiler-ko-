@@ -1,0 +1,39 @@
+| ========================================================== |
+| Test: Nested Collections and Edge Cases                     |
+| ========================================================== |
+[
+    | Nested dictionary access |
+    {'user': {'profile': {'name': 'Ko'}}}~data
+    <printf>^("name={data<'user'><'profile'><'name'>}\n")
+
+    | Nested list access |
+    (1, (2, (3, 4)))~nested
+    <printf>^("nested<1><1><0>={nested<1><1><0>}\n")
+
+    | Mixed collection: dict of tuples |
+    {'items': (10, 20, 30)}~mixed
+    <printf>^("mixed<'items'><1>={mixed<'items'><1>}\n")
+
+    | Tuple of dicts |
+    ({'a': 1}, {'b': 2})~tuple_dict
+    <printf>^("tuple_dict<0><a>={tuple_dict<0><'a'>}\n")
+
+    | Missing key catch |
+    {'x': 100}~safe_dic
+    <catch>(`KeyNotFoundError`) [
+        <printf>^("caught missing key\n")
+    ]
+    safe_dic<'missing'>
+
+    | Deeply nested indexing |
+    {'a': {'b': {'c': {'d': 99}}}}~deep
+    <printf>^("deep<a><b><c><d>={deep<'a'><'b'><'c'><'d'>}\n")
+
+    | Matrix-like access |
+    ((1, 2, 3), (4, 5, 6), (7, 8, 9))~matrix
+    <printf>^("matrix<1><2>={matrix<1><2>}\n")
+
+    | Dict with integer keys |
+    {1: 'one', 2: 'two', 3: 'three'}~int_dic
+    <printf>^("int_dic<2>={int_dic<2>}\n")
+]

@@ -1,0 +1,4 @@
+#!/bin/bash
+set -e
+export KO_HOME="$(dirname "$(readlink -f "$0")")/../share/ko"
+exec python3 "$KO_HOME/ko_compiler.py" "$@"

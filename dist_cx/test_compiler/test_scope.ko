@@ -1,0 +1,48 @@
+| ========================================================== |
+| Test: Scope System (global, main, func, class) |
+| ========================================================== |
+
+| Global scope variable (only Import, FuncDecl, ClassDecl allowed at top level) |
+**Import**($Random)@also%~random!`global`:random
+
+| Function with local scope |
+get_local() [
+    int(999)~local_var
+    <return>(local_var)
+]
+
+| Class with scope |
+ScopeTest !class [
+    @private [
+        int(0)~class_val
+
+        set_val(int~v) [
+            <now>(v)>class_val
+            <return>(class_val)
+        ]
+
+        get_val() [
+            <return>(class_val)
+        ]
+    ]
+]
+
+| Main block |
+[
+    | Global scope: random module available |
+    int(<$random>(1, 10))~global_rand
+    <printf>^("Global random: {global_rand}\n")
+
+    | Function local scope |
+    int(~get_local())~local_result
+    <printf>^("Local scope result: {local_result}\n")
+
+    | Class scope |
+    ~ScopeTest~st
+    int($st~set_val(42))~set_result
+    int($st~get_val())~get_result
+    <printf>^("Class scope: set={set_result}, get={get_result}\n")
+
+    | Verify global_rand is accessible in main |
+    <printf>^("Global rand still accessible: {global_rand}\n")
+]

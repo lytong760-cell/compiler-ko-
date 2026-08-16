@@ -1,0 +1,10 @@
+Package: ko-compiler
+Version: 2.800
+Section: devel
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.8), default-jre (>= 11)
+Maintainer: ko-studio.ai.studio <support@ko-studio.ai.studio>
+Description: .ko Language Compiler and Interpreter
+ The .ko programming language compiler with support for external libraries
+ from ko-studio.ai.studio.

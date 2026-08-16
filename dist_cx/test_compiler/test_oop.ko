@@ -1,0 +1,53 @@
+| ========================================================== |
+| Test: OOP (Classes, Instantiation, Methods, @private) |
+| ========================================================== |
+
+| Define a simple class |
+Character !class [
+    @private [
+        string("")~name
+        int(100)~hp
+        int(10)~attack
+
+        take_damage(int~dmg) [
+            int(hp - dmg)~new_hp
+            <now>(new_hp)>hp
+            <printf>^("{name} took {dmg} damage! HP={hp}\n")
+            <return>(hp)
+        ]
+
+        heal(int~amount) [
+            int(hp + amount)~new_hp
+            <now>(new_hp)>hp
+            <printf>^("{name} healed {amount}! HP={hp}\n")
+            <return>(hp)
+        ]
+
+        get_status() [
+            <return>(hp)
+        ]
+    ]
+]
+
+| Main block |
+[
+    | Create two instances |
+    ~Character~hero
+    ~Character~enemy
+
+    | Set names via direct attribute access |
+    ~Character~hero
+    ~Character~enemy
+
+    | Call methods |
+    int($hero~take_damage(20))~hero_hp
+    int($enemy~take_damage(15))~enemy_hp
+
+    | Heal hero |
+    int($hero~heal(10))~hero_healed
+
+    | Check status |
+    int($hero~get_status())~hero_status
+    int($enemy~get_status())~enemy_status
+    <printf>^("Hero HP: {hero_status}, Enemy HP: {enemy_status}\n")
+]

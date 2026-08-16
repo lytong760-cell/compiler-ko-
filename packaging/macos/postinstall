@@ -1,0 +1,11 @@
+#!/bin/bash
+set -e
+chmod +x /usr/local/bin/ko
+echo ""
+echo "Installation complete!"
+echo "You can now use 'ko' from anywhere in the terminal."
+echo ""
+echo "To get started:"
+echo "  ko --help"
+echo "  ko program.ko"
+echo ""

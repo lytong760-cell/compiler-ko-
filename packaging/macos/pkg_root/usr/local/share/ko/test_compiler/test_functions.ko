@@ -1,0 +1,54 @@
+| ========================================================== |
+| Test: Functions (definition, calling, return values) |
+| ========================================================== |
+
+| Function with params and return |
+calculate_sum(int~a, int~b) [
+    int(a + b)~result
+    <return>(result)
+]
+
+| Function with no params |
+get_ten() [
+    <return>(10)
+]
+
+| Function with freal |
+calculate_area(freal~radius) [
+    freal(3.14159 * radius * radius)~area
+    <return>(area)
+]
+
+| Function with string return |
+greet(string~name) [
+    string("Hello, " + name)~message
+    <return>(message)
+]
+
+| Function with booling param |
+check_status(booling~active) [
+    <if>(active) [
+        <return>(\True\)
+    ]
+    <else> [
+        <return>(\False\)
+    ]
+]
+
+| Main block calling all functions |
+[
+    int(~calculate_sum(10, 20))~sum_result
+    <printf>^("Sum: {sum_result}\n")
+
+    int(~get_ten())~ten_val
+    <printf>^("get_ten: {ten_val}\n")
+
+    freal(~calculate_area(5.0))~area_result
+    <printf>^("Area: {area_result}\n")
+
+    string(~greet("Player"))~greeting
+    <printf>^("{greeting}\n")
+
+    booling(~check_status(\True\))~status_check
+    <printf>^("Status check: {status_check}\n")
+]

@@ -1,0 +1,38 @@
+| ========================================================== |
+| Test: Nested Function Closures (live scope semantics)    |
+| ========================================================== |
+
+| outer() defines inner() which captures x |
+outer() [
+    int(1)~x
+    inner() [
+        <return>(x)
+    ]
+    int(2)~x
+    int(~inner())~result
+    <printf>^("outer_closure_result={result}\n")
+    <return>(result)
+]
+
+| Test nested call within enclosing scope |
+make_counter() [
+    int(0)~count
+    increment() [
+        int(count + 1)~count
+        <return>(count)
+    ]
+    <return>(increment)
+]
+
+adder(int~a, int~b) [
+    int(a + b)~result
+    <return>(result)
+]
+
+[
+    int(~outer())~outer_result
+    <printf>^("outer_result={outer_result}\n")
+
+    int(~adder(10, 20))~sum_val
+    <printf>^("sum_val={sum_val}\n")
+]

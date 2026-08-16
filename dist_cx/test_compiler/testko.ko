@@ -1,0 +1,46 @@
+| ========================================================== |
+| MINI PYTHON COMPILER WRITTEN IN .KO (SPEC V2.600)          |
+| ========================================================== |
+
+**Import**($Os)@also%~os!`global`:os
+
+[
+    <printf>^("=== .KO PYTHON COMPILER V1.0 ===\n")
+
+    | 1. Nạp mã nguồn Python thô từ file test.py |
+    <$os>("testko.py")~py_code
+    int(<len>^(py_code))~code_len
+
+    <if>(code_len == 0) [
+        <printf>^("[Lỗi]: File test.py rỗng hoặc không tồn tại!\n")
+    ]
+    <else> [
+        <printf>^("[Lexer]: Bắt đầu phân tích chuỗi Python ({code_len} bytes)...\n")
+        
+        | 2. Trích xuất nội dung bên trong lệnh print("...") của Python |
+        | Giả định cú pháp Python: print("Hello World") |
+        string("")~extracted_text
+        int(0)~is_inside_quote
+        
+        | Vòng lặp duyệt qua từng ký tự của file Python (Compiler Loop) |
+        **Loop** <for>(~i=0&=code_len) [
+            | Parser Logic: Bắt đầu lấy chuỗi khi gặp dấu ngoặc kép " |
+            <if>(py_code<i> == '"' && is_inside_quote == 0) [
+                <now>(1)>is_inside_quote
+            ]
+            <elif>(py_code<i> == '"' && is_inside_quote == 1) [
+                <now>(0)>is_inside_quote
+            ]
+            <elif>(is_inside_quote == 1) [
+                | Ghép ký tự vào bộ đệm chuỗi kết quả |
+                <now>(extracted_text + py_code<i>)>extracted_text
+            ]
+        ]
+
+        | 3. Code Generator / Execution Engine |
+        <printf>^("\n[AST & CodeGen]: Biên dịch câu lệnh PRINT thành công!\n")
+        <printf>^("--------------------------------------------------\n")
+        <printf>^("[PYTHON OUTPUT]: {extracted_text}\n")
+        <printf>^("--------------------------------------------------\n")
+    ]
+]

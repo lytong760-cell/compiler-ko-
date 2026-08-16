@@ -1,0 +1,37 @@
+| ========================================================== |
+| Test: Arithmetic and Logical Operators |
+| ========================================================== |
+[
+    | Arithmetic operators: + - * / % |
+    int(10)~a
+    int(3)~b
+    int(a + b)~sum_val
+    int(a - b)~diff_val
+    int(a * b)~prod_val
+    int(a / b)~quot_val
+    int(a % b)~rem_val
+    <printf>^("Arithmetic: sum={sum_val}, diff={diff_val}, prod={prod_val}, quot={quot_val}, rem={rem_val}\n")
+
+    | Logical operators: && and %% |
+    booling(\True\)~t1
+    booling(\False\)~f1
+    booling(t1 && f1)~and_result
+    booling(t1 %% f1)~or_result
+    booling(f1 %% f1)~or_false
+    <printf>^("Logical: and={and_result}, or_true={or_result}, or_false={or_false}\n")
+
+    | Comparison operators |
+    int(5)~x
+    int(10)~y
+    booling(x > y)~gt_result
+    booling(x < y)~lt_result
+    booling(x >= y)~ge_result
+    booling(x <= y)~le_result
+    booling(x == y)~eq_result
+    booling(x != y)~ne_result
+    <printf>^("Comparisons: gt={gt_result}, lt={lt_result}, ge={ge_result}, le={le_result}, eq={eq_result}, ne={ne_result}\n")
+
+    | Nested arithmetic |
+    int((a + b) * (a - b))~nested
+    <printf>^("Nested: (a+b)*(a-b)={nested}\n")
+]
