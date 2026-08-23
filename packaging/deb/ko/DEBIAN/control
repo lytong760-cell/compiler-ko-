@@ -3,8 +3,17 @@ Version: 2.800
 Section: devel
 Priority: optional
 Architecture: all
-Depends: python3 (>= 3.8), default-jre (>= 11)
+Depends: python3 (>= 3.8), default-jre | openjdk-17-jre | openjdk-11-jre | openjdk-8-jre
 Maintainer: ko-studio.ai.studio <support@ko-studio.ai.studio>
+Homepage: https://ko-studio.ai.studio
 Description: .ko Language Compiler and Interpreter
- The .ko programming language compiler with support for external libraries
- from ko-studio.ai.studio.
+ The .ko programming language compiler with automatic Java runtime detection.
+ Features:
+  - Multi-paradigm: imperative, OOP, low-level memory manipulation
+  - Automatic Java runtime installation if missing
+  - External library support from ko-studio.ai.studio
+ .
+ This package includes the ko compiler, Import.java module subsystem,
+ and built-in libraries (Random, Os, Website). If Java is not detected
+ during installation, the post-install script will attempt to install
+ OpenJDK 17 via the system package manager.
