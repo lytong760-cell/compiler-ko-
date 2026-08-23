@@ -53,44 +53,52 @@ echo ""
 echo ""
 echo "[2/3] Building Debian package..."
 
-TMPDIR=$(mktemp -d)
-mkdir -p "$TMPDIR/ko/usr/local/bin"
-mkdir -p "$TMPDIR/ko/usr/local/share/ko"
-mkdir -p "$TMPDIR/ko/DEBIAN"
-chmod 755 "$TMPDIR/ko"
-chmod 755 "$TMPDIR/ko/DEBIAN"
+if [ -f "$SCRIPT_DIR/build_deb.sh" ]; then
+    bash "$SCRIPT_DIR/build_deb.sh"
+else
+    echo "  WARNING: build_deb.sh not found. Using inline build..."
+    TMPDIR=$(mktemp -d)
+    mkdir -p "$TMPDIR/ko/usr/local/bin"
+    mkdir -p "$TMPDIR/ko/usr/local/share/ko"
+    mkdir -p "$TMPDIR/ko/DEBIAN"
+    chmod 755 "$TMPDIR/ko"
+    chmod 755 "$TMPDIR/ko/DEBIAN"
 
-cp "$ROOT_DIR/ko_compiler.py" "$TMPDIR/ko/usr/local/share/ko/"
-cp "$ROOT_DIR/Import.java" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
-cp "$ROOT_DIR/Import.class" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
-cp -r "$ROOT_DIR/test_compiler" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
-cp -r "$ROOT_DIR/ir.py" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
-cp -r "$ROOT_DIR/optimizer.py" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
-cp -r "$ROOT_DIR/semantic_analyzer.py" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
+    cp "$ROOT_DIR/ko_compiler.py" "$TMPDIR/ko/usr/local/share/ko/"
+    cp "$ROOT_DIR/Import.java" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
+    cp "$ROOT_DIR/Import.class" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
+    cp -r "$ROOT_DIR/test_compiler" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
+    cp -r "$ROOT_DIR/ir.py" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
+    cp -r "$ROOT_DIR/optimizer.py" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
+    cp -r "$ROOT_DIR/semantic_analyzer.py" "$TMPDIR/ko/usr/local/share/ko/" 2>/dev/null || true
 
-cat > "$TMPDIR/ko/usr/local/bin/ko" << 'WRAPPER'
+    cat > "$TMPDIR/ko/usr/local/bin/ko" << 'WRAPPER'
 #!/bin/bash
 set -e
 export KO_HOME="$(dirname "$(readlink -f "$0")")/../share/ko"
 exec python3 "$KO_HOME/ko_compiler.py" "$@"
 WRAPPER
-chmod +x "$TMPDIR/ko/usr/local/bin/ko"
+    chmod +x "$TMPDIR/ko/usr/local/bin/ko"
 
-cat > "$TMPDIR/ko/DEBIAN/control" << 'CONTROL'
+    cat > "$TMPDIR/ko/DEBIAN/control" << 'CONTROL'
 Package: ko-compiler
 Version: 2.800
 Section: devel
 Priority: optional
 Architecture: all
-Depends: python3 (>= 3.8), default-jre (>= 11)
+Depends: python3 (>= 3.8), default-jre | openjdk-17-jre | openjdk-11-jre | openjdk-8-jre
 Maintainer: ko-studio.ai.studio <support@ko-studio.ai.studio>
+Homepage: https://ko-studio.ai.studio
 Description: .ko Language Compiler and Interpreter
- The .ko programming language compiler with support for external libraries
- from ko-studio.ai.studio.
+ The .ko programming language compiler with automatic Java runtime detection.
+ Features:
+  - Multi-paradigm: imperative, OOP, low-level memory manipulation
+  - Automatic Java runtime installation if missing
+  - External library support from ko-studio.ai.studio
 CONTROL
-chmod 644 "$TMPDIR/ko/DEBIAN/control"
+    chmod 644 "$TMPDIR/ko/DEBIAN/control"
 
-cat > "$TMPDIR/ko/DEBIAN/postinst" << 'POSTINST'
+    cat > "$TMPDIR/ko/DEBIAN/postinst" << 'POSTINST'
 #!/bin/bash
 set -e
 mkdir -p "$HOME/.ko/modules"
@@ -107,18 +115,19 @@ chmod +x /usr/local/bin/ko
 echo "ko compiler installed successfully!"
 echo "Run 'ko --help' to get started."
 POSTINST
-chmod 755 "$TMPDIR/ko/DEBIAN/postinst"
+    chmod 755 "$TMPDIR/ko/DEBIAN/postinst"
 
-cat > "$TMPDIR/ko/DEBIAN/prerm" << 'PRERM'
+    cat > "$TMPDIR/ko/DEBIAN/prerm" << 'PRERM'
 #!/bin/bash
 set -e
 echo "ko compiler removed."
 PRERM
-chmod 755 "$TMPDIR/ko/DEBIAN/prerm"
+    chmod 755 "$TMPDIR/ko/DEBIAN/prerm"
 
-dpkg-deb --build "$TMPDIR/ko" "$DIST_DIR/ko-compiler_${VERSION}_all.deb"
-echo "  Debian package: $DIST_DIR/ko-compiler_${VERSION}_all.deb"
-rm -rf "$TMPDIR"
+    dpkg-deb --build "$TMPDIR/ko" "$DIST_DIR/ko-compiler_${VERSION}_all.deb"
+    echo "  Debian package: $DIST_DIR/ko-compiler_${VERSION}_all.deb"
+    rm -rf "$TMPDIR"
+fi
 
 # ==========================================
 # 3. macOS .pkg installer
