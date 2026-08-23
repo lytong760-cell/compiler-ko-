@@ -1,8 +1,11 @@
 /**
  * Import.java - Hybrid Import Subsystem for .ko Language
- * 
+ *
+ * Compile with: javac --release 11 Import.java
+ * This ensures compatibility with Java 11+ runtimes.
+ *
  * Supports both built-in local modules and external libraries from ko-studio.ai.studio.
- * 
+ *
  * Usage:
  *   java Import <module_name> <alias> <scope_tag>  - Resolve module metadata
  *   java Import install <module_name>               - Install external library
