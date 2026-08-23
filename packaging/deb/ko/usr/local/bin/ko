@@ -1,4 +1,32 @@
 #!/bin/bash
 set -e
-export KO_HOME="$(dirname "$(readlink -f "$0")")/../share/ko"
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KO_HOME="$(dirname "$SCRIPT_DIR")/share/ko"
+
+# Ensure KO_HOME exists
+if [ ! -d "$KO_HOME" ]; then
+    echo "ERROR: ko installation not found at $KO_HOME" >&2
+    exit 1
+fi
+
+# Check Python3
+if ! command -v python3 &> /dev/null; then
+    echo "ERROR: Python 3 is required but not installed." >&2
+    echo "Install with: sudo apt install python3" >&2
+    exit 1
+fi
+
+# Check Java (quick check, detailed check done by postinst)
+if ! command -v java &> /dev/null; then
+    echo "WARNING: Java runtime not found. Some features may not work." >&2
+    echo "Install with: sudo apt install default-jre" >&2
+    echo "Or run: ko --install <module_name> to install Java automatically" >&2
+fi
+
+# Ensure PYTHONPATH includes bundled modules
+export PYTHONPATH="$KO_HOME:${PYTHONPATH:-}"
+
+# Execute compiler
 exec python3 "$KO_HOME/ko_compiler.py" "$@"
