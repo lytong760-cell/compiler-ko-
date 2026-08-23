@@ -17,146 +17,35 @@ echo "=========================================="
 # ==========================================
 echo ""
 echo "[1/3] Building Windows installer..."
+echo ""
+echo "NOTE: Windows .exe must be built on Windows with Python 3.8+."
+echo "      Run: python packaging/windows/build_windows.py"
+echo ""
 
+# Prepare Windows installer source files
 WINDOWS_DIR="$SCRIPT_DIR/windows"
 INSTALLER_DIR="$WINDOWS_DIR/installer"
 rm -rf "$INSTALLER_DIR"
 mkdir -p "$INSTALLER_DIR"
 
-# Copy all necessary files
+# Copy all necessary files for Windows build
 cp "$ROOT_DIR/ko_compiler.py" "$INSTALLER_DIR/"
 cp "$ROOT_DIR/Import.java" "$INSTALLER_DIR/" 2>/dev/null || true
 cp "$ROOT_DIR/Import.class" "$INSTALLER_DIR/" 2>/dev/null || true
-cp -r "$ROOT_DIR/test_compiler" "$INSTALLER_DIR/" 2>/dev/null || true
-cp -r "$ROOT_DIR/ir.py" "$INSTALLER_DIR/" 2>/dev/null || true
-cp -r "$ROOT_DIR/optimizer.py" "$INSTALLER_DIR/" 2>/dev/null || true
-cp -r "$ROOT_DIR/semantic_analyzer.py" "$INSTALLER_DIR/" 2>/dev/null || true
+cp "$ROOT_DIR/ko_cli.py" "$INSTALLER_DIR/" 2>/dev/null || true
+cp "$ROOT_DIR/ir.py" "$INSTALLER_DIR/" 2>/dev/null || true
+cp "$ROOT_DIR/optimizer.py" "$INSTALLER_DIR/" 2>/dev/null || true
+cp "$ROOT_DIR/semantic_analyzer.py" "$INSTALLER_DIR/" 2>/dev/null || true
+cp "$ROOT_DIR/ko_compiler.spec" "$INSTALLER_DIR/" 2>/dev/null || true
+if [ -d "$ROOT_DIR/test_compiler" ]; then
+    cp -r "$ROOT_DIR/test_compiler" "$INSTALLER_DIR/"
+fi
 
-# Create Windows CLI batch file
-cat > "$INSTALLER_DIR/ko.bat" << 'BATCH'
-@echo off
-setlocal enabledelayedexpansion
-set "KO_HOME=%~dp0"
-set "PATH=%KO_HOME%;%PATH%"
-
-if "%~1"=="" (
-    ko --help
-    exit /b 1
-)
-
-if "%~1"=="--install" (
-    if "%~2"=="" (
-        echo Error: --install requires a module name >&2
-        exit /b 1
-    )
-    echo Installing library: %~2 >&2
-    python "%KO_HOME%ko_compiler.py" --install "%~2"
-    exit /b %ERRORLEVEL%
-)
-
-if "%~1"=="-h" goto :show_help
-if "%~1"=="--help" goto :show_help
-
-if "%~1"=="--version" (
-    echo ko compiler v2.800
-    echo Copyright (c) 2026 ko-studio.ai.studio
-    exit /b 0
-)
-
-python "%KO_HOME%ko_compiler.py" %*
-exit /b %ERRORLEVEL%
-
-:show_help
-echo ko - .ko Language Compiler CLI
-echo.
-echo USAGE:
-echo     ko [OPTIONS] ^<file.ko^>
-echo     ko --install ^<module_name^>
-echo.
-echo OPTIONS:
-echo     -h, --help      Show this help message
-echo     --install       Install an external library
-echo     --version       Show version information
-echo.
-echo EXAMPLES:
-echo     ko program.ko                  Run a .ko program
-echo     ko --install MyLibrary         Install an external library
-echo.
-echo For more information, visit: https://ko-studio.ai.studio
-exit /b 0
-BATCH
-
-# Create installer Python script
-cat > "$WINDOWS_DIR/create_installer.py" << 'PYEOF'
-import zipfile
-import os
-import sys
-
-def create_windows_installer():
-    source_dir = sys.argv[1]
-    output_file = sys.argv[2]
-    
-    zip_file = output_file.replace('.exe', '.zip')
-    with zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-        for root, dirs, files in os.walk(source_dir):
-            dirs[:] = [d for d in dirs if d != '__pycache__']
-            for file in files:
-                if file.endswith('.pyc') or file == 'create_installer.py':
-                    continue
-                filepath = os.path.join(root, file)
-                arcname = os.path.relpath(filepath, source_dir)
-                zf.write(filepath, arcname)
-    
-    batch_stub = b'''@echo off
-chcp 65001 >nul
-setlocal
-set "INSTALL_DIR=%USERPROFILE%\\.ko"
-set "PATH=%INSTALL_DIR%;%PATH%"
-
-echo ==========================================
-echo   ko Compiler v2.800 Installer
-echo ==========================================
-echo.
-echo This will install the .ko compiler to: %INSTALL_DIR%
-echo.
-
-set "EXTRACT_DIR=%TEMP%\\ko_install_%RANDOM%"
-mkdir "%EXTRACT_DIR%" >nul 2>&1
-
-echo Extracting files...
-powershell -Command "Expand-Archive -Path '%~f0' -DestinationPath '%EXTRACT_DIR%' -Force" >nul 2>&1
-
-echo Installing...
-xcopy /E /I /Y "%EXTRACT_DIR%\\*" "%INSTALL_DIR%\\" >nul
-rmdir /S /Q "%EXTRACT_DIR%" >nul 2>&1
-
-echo.
-echo Installation complete!
-echo You can now use 'ko' from anywhere in the terminal.
-echo.
-echo To get started:
-echo   ko --help
-echo   ko program.ko
-echo.
-pause
-exit /b 0
-'''
-    
-    with open(zip_file, 'rb') as f:
-        zip_content = f.read()
-    
-    with open(output_file, 'wb') as f:
-        f.write(batch_stub + zip_content)
-    
-    os.remove(zip_file)
-    print(f"Created: {output_file}")
-
-if __name__ == '__main__':
-    create_windows_installer()
-PYEOF
-
-python3 "$WINDOWS_DIR/create_installer.py" "$INSTALLER_DIR" "$WINDOWS_DIR/dist/ko-setup-v$VERSION.exe"
-echo "  Windows installer: $WINDOWS_DIR/dist/ko-setup-v$VERSION.exe"
+echo "  Windows source prepared at: $INSTALLER_DIR"
+echo "  To build on Windows:"
+echo "    cd packaging/windows"
+echo "    python build_windows.py"
+echo ""
 
 # ==========================================
 # 2. Debian .deb package
