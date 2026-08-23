@@ -44,9 +44,9 @@ fi
 
 # Copy deb-specific files from packaging/deb
 echo "[2/4] Copying package metadata..."
-cp "$SCRIPT_DIR/../deb/ko/DEBIAN/control" "$TMPDIR/ko/DEBIAN/"
-cp "$SCRIPT_DIR/../deb/ko/DEBIAN/postinst" "$TMPDIR/ko/DEBIAN/"
-cp "$SCRIPT_DIR/../deb/ko/usr/local/bin/ko" "$TMPDIR/ko/usr/local/bin/"
+cp "$SCRIPT_DIR/deb/ko/DEBIAN/control" "$TMPDIR/ko/DEBIAN/"
+cp "$SCRIPT_DIR/deb/ko/DEBIAN/postinst" "$TMPDIR/ko/DEBIAN/"
+cp "$SCRIPT_DIR/deb/ko/usr/local/bin/ko" "$TMPDIR/ko/usr/local/bin/"
 
 # Set permissions
 echo "[3/4] Setting permissions..."
