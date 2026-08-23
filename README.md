@@ -120,7 +120,56 @@ The interpreter includes source-level security validation:
 - **Dangerous function detection**: `exec()`, `eval()`, `__import__()`, `subprocess`, `os.system`, `shutil`, `pickle`, `shelve` are blocked
 - **Path traversal detection**: `..` in import/file-open contexts is blocked
 
-## Testing
+## Installation
+
+### Prerequisites
+- **Python 3.8+** (for source/distribution usage)
+- **Java 11+** (for module imports and external libraries)
+  - The installer will auto-detect and offer to install Java if missing.
+
+### Windows
+1. Download `ko-installer-2.800.exe`
+2. Run the installer
+3. If Java is missing, the installer will offer to download and install it automatically
+4. After installation, open a new terminal and run: `ko --help`
+
+### Linux (.deb)
+```bash
+# Download the .deb package
+wget https://github.com/ko-studio/compiler-ko-/releases/download/v2.800/ko-compiler_2.800_all.deb
+
+# Install (will auto-install Java if missing)
+sudo dpkg -i ko-compiler_2.800_all.deb
+
+# Or use apt (recommended for dependency resolution)
+sudo apt install ./ko-compiler_2.800_all.deb
+```
+
+### Build from Source
+```bash
+# Clone the repository
+git clone https://github.com/ko-studio/compiler-ko-.git
+cd compiler-ko-
+
+# Install dependencies
+pip3 install pyinstaller
+
+# Build all packages
+bash packaging/build_all.sh
+```
+
+### Manual Java Installation
+If automatic installation fails:
+- Windows: https://adoptium.net/temurin/releases/
+- Linux (Debian/Ubuntu): `sudo apt install openjdk-17-jre`
+- Linux (RHEL/Fedora): `sudo dnf install java-17-openjdk`
+- macOS: `brew install openjdk@17`
+
+## Usage
+```bash
+ko program.ko
+ko --install LibraryName
+```
 
 - `test_simple.ko` — basic arithmetic regression test
 - `test_spec.ko` — comprehensive test suite with expected output
