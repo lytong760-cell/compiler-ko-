@@ -1,15 +1,97 @@
 #!/bin/bash
 set -e
+
+echo "=========================================="
+echo "  ko Compiler v2.800 Installation"
+echo "=========================================="
+echo ""
+
+# Create modules directory
 mkdir -p "$HOME/.ko/modules"
-if [ ! -f "$HOME/.ko/modules/Random.ko" ]; then
-    echo '# Built-in Random module' > "$HOME/.ko/modules/Random.ko"
+
+# Check Java runtime
+echo "[1/4] Checking Java runtime..."
+if ! command -v java &> /dev/null; then
+    echo ""
+    echo "Java runtime not found!"
+    echo "This compiler requires Java 11 or higher."
+    echo ""
+
+    # Try to auto-install based on distribution
+    if [ -f /etc/debian_version ]; then
+        echo "[2/4] Installing OpenJDK 17 via apt..."
+        apt-get update -qq
+        apt-get install -y -qq openjdk-17-jre-headless || {
+            echo ""
+            echo "Automatic installation failed."
+            echo "Please install Java manually:"
+            echo "  sudo apt install openjdk-17-jre"
+            echo "  OR download from: https://adoptium.net/"
+            exit 1
+        }
+    elif [ -f /etc/redhat-release ]; then
+        echo "[2/4] Installing OpenJDK 17 via yum/dnf..."
+        if command -v dnf &> /dev/null; then
+            dnf install -y java-17-openjdk || {
+                echo "Automatic installation failed. Please install Java manually."
+                exit 1
+            }
+        else
+            yum install -y java-17-openjdk || {
+                echo "Automatic installation failed. Please install Java manually."
+                exit 1
+            }
+        fi
+    elif [ -f /etc/arch-release ]; then
+        echo "[2/4] Installing OpenJDK 17 via pacman..."
+        pacman -Sy --noconfirm jre17-openjdk || {
+            echo "Automatic installation failed. Please install Java manually."
+            exit 1
+        }
+    else
+        echo "Unsupported distribution. Please install Java manually:"
+        echo "  https://adoptium.net/temurin/releases/"
+        exit 1
+    fi
+
+    echo "[3/4] Java installed successfully!"
+else
+    # Verify Java version
+    JAVA_VER=$(java -version 2>&1 | head -1 | cut -d'"' -f2 | cut -d'.' -f1)
+    if [ "$JAVA_VER" -lt 11 ] 2>/dev/null; then
+        echo "ERROR: Java version $JAVA_VER is too old. Requires Java 11+"
+        echo "Please upgrade Java manually."
+        exit 1
+    fi
+    echo "Java $JAVA_VER detected"
 fi
-if [ ! -f "$HOME/.ko/modules/Os.ko" ]; then
-    echo '# Built-in OS module' > "$HOME/.ko/modules/Os.ko"
-fi
-if [ ! -f "$HOME/.ko/modules/Website.ko" ]; then
-    echo '# Built-in Website module' > "$HOME/.ko/modules/Website.ko"
-fi
+
+# Create built-in module stubs
+echo "[3/4] Setting up built-in modules..."
+for module in Random Os Website; do
+    if [ ! -f "$HOME/.ko/modules/${module}.ko" ]; then
+        cat > "$HOME/.ko/modules/${module}.ko" << EOF
+| Built-in ${module} module for .ko language |
+| This module is implemented natively in Import.java |
+EOF
+    fi
+done
+
+# Set permissions
+echo "[4/4] Setting permissions..."
 chmod +x /usr/local/bin/ko
-echo "ko compiler installed successfully!"
-echo "Run 'ko --help' to get started."
+
+echo ""
+echo "=========================================="
+echo "  Installation Complete!"
+echo "=========================================="
+echo ""
+echo "Usage:"
+echo "  ko --help          Show help"
+echo "  ko program.ko      Run a .ko file"
+echo ""
+echo "Built-in modules: Random, Os, Website"
+echo "External libraries: Use '**Import**($LibraryName)@also'"
+echo ""
+
+exit 0
