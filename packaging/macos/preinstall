@@ -1,72 +1,11 @@
 #!/bin/bash
 set -e
-
 echo "=========================================="
 echo "   ko Compiler v2.800 Installer"
 echo "=========================================="
 echo ""
 echo "This will install the .ko compiler to: /usr/local"
 echo ""
-
-# Check if Java runtime is available
-if ! command -v java &> /dev/null; then
-    echo "Java runtime not found."
-    echo "This compiler requires Java 11 or higher."
-    echo ""
-    read -p "Do you want to download and install Java now? (Y/N): " DOWNLOAD_JAVA
-    if [[ "$DOWNLOAD_JAVA" =~ ^[Yy]$ ]]; then
-        echo ""
-        echo "Downloading Java..."
-        
-        # Download Adoptium JDK
-        JAVA_URL="https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.11%2B9/OpenJDK17U-jdk_x64_mac_hotspot_17.0.11_9.tar.gz"
-        JAVA_DIR="/tmp/ko_java_install"
-        mkdir -p "$JAVA_DIR"
-        
-        echo "Downloading from Adoptium..."
-        curl -L -o "$JAVA_DIR/java.tar.gz" "$JAVA_URL" 2>/dev/null || {
-            echo "ERROR: Failed to download Java."
-            echo "Please install Java manually from:"
-            echo "  https://adoptium.net/temurin/releases/"
-            echo "  https://www.java.com/download/"
-            exit 1
-        }
-        
-        echo "Installing Java..."
-        tar -xzf "$JAVA_DIR/java.tar.gz" -C "$JAVA_DIR"
-        
-        # Find the extracted JDK directory
-        JDK_DIR=$(find "$JAVA_DIR" -name "jdk-17*" -type d | head -1)
-        if [ -z "$JDK_DIR" ]; then
-            echo "ERROR: Failed to extract Java."
-            exit 1
-        fi
-        
-        # Move to /Library/Java/JavaVirtualMachines
-        sudo mkdir -p "/Library/Java/JavaVirtualMachines"
-        sudo mv "$JDK_DIR" "/Library/Java/JavaVirtualMachines/"
-        
-        # Set JAVA_HOME
-        echo 'export JAVA_HOME="/Library/Java/JavaVirtualMachines/$(ls /Library/Java/JavaVirtualMachines/ | grep jdk-17)"' >> ~/.bash_profile
-        echo 'export PATH="$JAVA_HOME/bin:$PATH"' >> ~/.bash_profile
-        
-        # Clean up
-        rm -rf "$JAVA_DIR"
-        
-        echo "Java installed successfully."
-        echo "Please restart your terminal and run this installer again."
-        exit 0
-    else
-        echo ""
-        echo "Please install Java manually from:"
-        echo "  https://adoptium.net/temurin/releases/"
-        echo "  https://www.java.com/download/"
-        echo ""
-        exit 1
-    fi
-fi
-
-# Create modules directory
 mkdir -p "$HOME/.ko/modules"
 if [ ! -f "$HOME/.ko/modules/Random.ko" ]; then
     echo '# Built-in Random module' > "$HOME/.ko/modules/Random.ko"

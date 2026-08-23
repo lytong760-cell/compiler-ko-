@@ -1885,8 +1885,11 @@ class KoInterpreter:
         import_java = os.path.join(compiler_dir, "Import.java")
         import_class = os.path.join(compiler_dir, "Import.class")
         
-        # Compile Import.java if needed
-        if not os.path.exists(import_class):
+        # Compile Import.java if needed or if source is newer than class
+        if not os.path.exists(import_class) or (
+            os.path.exists(import_java) and
+            os.path.getmtime(import_java) > os.path.getmtime(import_class)
+        ):
             result = subprocess.run(
                 ["javac", import_java],
                 capture_output=True, text=True, timeout=30
@@ -3099,6 +3102,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run .ko source (v2.800)")
     parser.add_argument("source", help="Path to a .ko file")
     parser.add_argument("--install", help="Install an external library from ko-studio.ai.studio")
+    parser.add_argument("--version", action="version", version="ko compiler v2.800")
     args = parser.parse_args(argv)
     
     if args.install:
